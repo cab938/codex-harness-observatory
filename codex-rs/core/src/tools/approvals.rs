@@ -646,16 +646,6 @@ impl Session {
     ) -> ReviewDecision {
         let is_network_approval = matches!(&action, ApprovalAction::NetworkAccess { .. });
         let review_id = new_guardian_review_id();
-        record_approval_event(
-            self,
-            ctx,
-            "approval_reviewer",
-            HARNESS_PHASE_DECIDED,
-            "guardian",
-            Some("review_requested"),
-            action.id(),
-            json!({"guardian_review_id": review_id}),
-        );
         let action = match action.into_guardian_request() {
             Ok(action) => action,
             Err(err) => {
@@ -785,7 +775,8 @@ impl Session {
                     .cache_keys()
                     .into_iter()
                     .map(|key| (key, &policy_fingerprint))
-                    .collect();
+                    .collect::<Vec<_>>();
+                let cache_key_count = cache_keys.len();
                 let approval_id = action.id().to_string();
                 with_cached_approval(
                     &self.services,
@@ -817,7 +808,7 @@ impl Session {
                             cache_outcome,
                             None,
                             &approval_id,
-                            json!({"key_count": 1}),
+                            json!({"key_count": cache_key_count}),
                         );
                     },
                 )

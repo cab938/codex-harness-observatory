@@ -384,6 +384,14 @@ impl ToolOrchestrator {
                 }) = err.details()
                 else {
                     let err = ToolError::Codex(err);
+                    Self::record_decision(
+                        tool_ctx,
+                        "sandbox_attempt",
+                        HARNESS_PHASE_RESOLVED,
+                        "failed",
+                        Some("tool_error"),
+                        json!({"ordinal": 1, "sandbox_type": initial_sandbox.as_metric_tag()}),
+                    );
                     if let Some(outcome) = sandbox_outcome_from_tool_error(&err) {
                         otel.sandbox_outcome(
                             &otel_tn,
@@ -631,7 +639,7 @@ impl ToolOrchestrator {
                             tool_ctx,
                             "sandbox_escalation",
                             HARNESS_PHASE_RESOLVED,
-                            "approved",
+                            "completed",
                             None,
                             json!({"ordinal": 2}),
                         );
@@ -661,7 +669,7 @@ impl ToolOrchestrator {
                             tool_ctx,
                             "sandbox_escalation",
                             HARNESS_PHASE_RESOLVED,
-                            "denied",
+                            "failed",
                             None,
                             json!({"ordinal": 2, "outcome": outcome}),
                         );
