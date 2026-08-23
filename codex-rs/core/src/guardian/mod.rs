@@ -77,6 +77,7 @@ const TRUNCATION_TAG: &str = "truncated";
 pub(crate) struct GuardianReviewContext {
     turn: Arc<TurnContext>,
     environments: TurnEnvironmentSnapshot,
+    trace_step_id: Option<codex_rollout_trace::HarnessStepId>,
 }
 
 impl GuardianReviewContext {
@@ -87,6 +88,10 @@ impl GuardianReviewContext {
     pub(crate) fn environments(&self) -> &TurnEnvironmentSnapshot {
         &self.environments
     }
+
+    pub(crate) fn trace_step_id(&self) -> Option<codex_rollout_trace::HarnessStepId> {
+        self.trace_step_id.clone()
+    }
 }
 
 impl From<&Arc<StepContext>> for GuardianReviewContext {
@@ -94,6 +99,7 @@ impl From<&Arc<StepContext>> for GuardianReviewContext {
         Self {
             turn: Arc::clone(&step.turn),
             environments: step.environments.clone(),
+            trace_step_id: step.trace_step_id.clone(),
         }
     }
 }
@@ -103,6 +109,7 @@ impl From<Arc<TurnContext>> for GuardianReviewContext {
         Self {
             environments: turn.environments.clone(),
             turn,
+            trace_step_id: None,
         }
     }
 }

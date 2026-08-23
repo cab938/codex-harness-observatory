@@ -41,9 +41,14 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_rollout_trace::HARNESS_CATEGORY_DECISION;
+use codex_rollout_trace::HARNESS_PHASE_DECIDED;
+use codex_rollout_trace::HARNESS_PHASE_RESOLVED;
+use codex_rollout_trace::HarnessTraceEvent;
 use codex_tools::ToolName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -158,6 +163,19 @@ pub(crate) enum ApprovalCacheKey {
 }
 
 impl ApprovalAction {
+    fn id(&self) -> &str {
+        match self {
+            Self::Shell { id, .. }
+            | Self::ExecCommand { id, .. }
+            | Self::ApplyPatch { id, .. }
+            | Self::McpToolCall { id, .. }
+            | Self::NetworkAccess { id, .. }
+            | Self::RequestPermissions { id, .. } => id,
+            #[cfg(unix)]
+            Self::Execve { id, .. } => id,
+        }
+    }
+
     pub(crate) fn permission_request_payload(&self) -> PermissionRequestPayload {
         match self {
             Self::Shell {
@@ -425,6 +443,13 @@ enum ApprovalReviewer {
 }
 
 impl ApprovalReviewer {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Guardian => "guardian",
+            Self::User => "user",
+        }
+    }
+
     fn for_turn(turn: &TurnContext) -> Self {
         Self::for_policy(turn.approval_policy(), turn.config.approvals_reviewer)
     }
@@ -443,6 +468,16 @@ enum ApprovalResolutionSource {
     Hook,
     Guardian,
     User,
+}
+
+impl ApprovalResolutionSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Hook => "configuration",
+            Self::Guardian => "guardian",
+            Self::User => "user",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -496,6 +531,7 @@ impl Session {
             _ if ctx.retry_reason.is_some() => format!("{}:retry", ctx.call_id),
             _ => ctx.call_id.clone(),
         };
+        let approval_id = action.id().to_string();
 
         // Approval precedence is:
         // 1. Hooks
@@ -518,6 +554,16 @@ impl Session {
             },
             None => self.request_reviewer_approval(action, &ctx).await,
         };
+        record_approval_event(
+            self,
+            &ctx,
+            "approval_resolution",
+            HARNESS_PHASE_RESOLVED,
+            resolution.decision.to_opaque_string(),
+            Some(resolution.source.as_str()),
+            &approval_id,
+            json!({"source": resolution.source.as_str()}),
+        );
         // Network approvals record their final telemetry after validation and persistence.
         if !is_network_approval {
             record_resolution(&ctx, &resolution);
@@ -563,6 +609,20 @@ impl Session {
         } else {
             ApprovalReviewer::for_turn(ctx.review_context.turn())
         };
+        record_approval_event(
+            self,
+            ctx,
+            "approval_reviewer",
+            HARNESS_PHASE_DECIDED,
+            reviewer.as_str(),
+            Some(if ctx.strict_auto_review {
+                "strict_auto_review"
+            } else {
+                "policy"
+            }),
+            action.id(),
+            json!({"strict_auto_review": ctx.strict_auto_review}),
+        );
 
         let decision = match reviewer {
             ApprovalReviewer::Guardian => {
@@ -586,6 +646,16 @@ impl Session {
     ) -> ReviewDecision {
         let is_network_approval = matches!(&action, ApprovalAction::NetworkAccess { .. });
         let review_id = new_guardian_review_id();
+        record_approval_event(
+            self,
+            ctx,
+            "approval_reviewer",
+            HARNESS_PHASE_DECIDED,
+            "guardian",
+            Some("review_requested"),
+            action.id(),
+            json!({"guardian_review_id": review_id}),
+        );
         let action = match action.into_guardian_request() {
             Ok(action) => action,
             Err(err) => {
@@ -716,23 +786,41 @@ impl Session {
                     .into_iter()
                     .map(|key| (key, &policy_fingerprint))
                     .collect();
-                with_cached_approval(&self.services, tool_name, cache_keys, || async {
-                    self.request_command_approval(
-                        ctx.review_context.turn(),
-                        ctx.call_id.clone(),
-                        /*approval_id*/ None,
-                        Some(environment_id.clone()),
-                        command.clone(),
-                        cwd,
-                        reason,
-                        ctx.network_approval_context.clone(),
-                        proposed_execpolicy_amendment.clone(),
-                        additional_permissions.clone(),
-                        /*available_decisions*/ None,
-                        /*plugin_attribution_override*/ None,
-                    )
-                    .await
-                })
+                let approval_id = action.id().to_string();
+                with_cached_approval(
+                    &self.services,
+                    tool_name,
+                    cache_keys,
+                    || async {
+                        self.request_command_approval(
+                            ctx.review_context.turn(),
+                            ctx.call_id.clone(),
+                            /*approval_id*/ None,
+                            Some(environment_id.clone()),
+                            command.clone(),
+                            cwd,
+                            reason,
+                            ctx.network_approval_context.clone(),
+                            proposed_execpolicy_amendment.clone(),
+                            additional_permissions.clone(),
+                            /*available_decisions*/ None,
+                            /*plugin_attribution_override*/ None,
+                        )
+                        .await
+                    },
+                    |cache_outcome| {
+                        record_approval_event(
+                            self,
+                            ctx,
+                            "approval_cache",
+                            HARNESS_PHASE_RESOLVED,
+                            cache_outcome,
+                            None,
+                            &approval_id,
+                            json!({"key_count": 1}),
+                        );
+                    },
+                )
                 .await
             }
             #[cfg(unix)]
@@ -783,6 +871,7 @@ impl Session {
                         )
                         .await;
                 }
+                let approval_id = action.id().to_string();
                 with_cached_approval(
                     &self.services,
                     "apply_patch",
@@ -796,6 +885,18 @@ impl Session {
                             /*grant_root*/ None,
                         )
                         .await
+                    },
+                    |cache_outcome| {
+                        record_approval_event(
+                            self,
+                            ctx,
+                            "approval_cache",
+                            HARNESS_PHASE_RESOLVED,
+                            cache_outcome,
+                            None,
+                            &approval_id,
+                            json!({"key_count": changes.len()}),
+                        );
                     },
                 )
                 .await
@@ -836,6 +937,31 @@ impl Session {
             }
         }
     }
+}
+
+fn record_approval_event(
+    session: &Session,
+    ctx: &ApprovalContext,
+    name: &'static str,
+    phase: &'static str,
+    outcome: &'static str,
+    reason: Option<&'static str>,
+    approval_id: &str,
+    details: serde_json::Value,
+) {
+    let mut event = HarnessTraceEvent::new(HARNESS_CATEGORY_DECISION, name, phase)
+        .with_optional_step_id(ctx.review_context.trace_step_id())
+        .with_outcome(outcome)
+        .with_correlation("tool_call_id", ctx.call_id.clone())
+        .with_correlation("approval_id", approval_id)
+        .with_details(details);
+    if let Some(reason) = reason {
+        event = event.with_reason(reason);
+    }
+    session
+        .services
+        .rollout_thread_trace
+        .record_harness_event(ctx.review_context.turn().sub_id.clone(), event);
 }
 
 fn record_resolution(ctx: &ApprovalContext, resolution: &ApprovalResolution) {

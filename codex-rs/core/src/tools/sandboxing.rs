@@ -67,20 +67,23 @@ impl ApprovalStore {
 /// - If all keys are already approved for session, we skip prompting.
 /// - If the user approves for session, we store the decision for each key individually
 ///   so future requests touching any subset can also skip prompting.
-pub(crate) async fn with_cached_approval<K, F, Fut>(
+pub(crate) async fn with_cached_approval<K, F, Fut, O>(
     services: &SessionServices,
     // Name of the tool, used for metrics collection.
     tool_name: &str,
     keys: Vec<K>,
     fetch: F,
+    observe: O,
 ) -> ReviewDecision
 where
     K: Serialize,
     F: FnOnce() -> Fut,
     Fut: Future<Output = ReviewDecision>,
+    O: Fn(&'static str),
 {
     // To be defensive here, don't bother with checking the cache if keys are empty.
     if keys.is_empty() {
+        observe("miss");
         return fetch().await;
     }
 
@@ -91,9 +94,11 @@ where
     };
 
     if already_approved {
+        observe("hit");
         return ReviewDecision::ApprovedForSession;
     }
 
+    observe("miss");
     let decision = fetch().await;
 
     services.session_telemetry.counter(
@@ -110,6 +115,7 @@ where
         for key in keys {
             store.put(key, ReviewDecision::ApprovedForSession);
         }
+        observe("stored");
     }
 
     decision

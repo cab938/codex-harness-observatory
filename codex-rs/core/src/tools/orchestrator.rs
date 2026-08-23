@@ -31,8 +31,15 @@ use codex_protocol::error::SandboxErr;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+use codex_rollout_trace::HARNESS_CATEGORY_DECISION;
+use codex_rollout_trace::HARNESS_PHASE_DECIDED;
+use codex_rollout_trace::HARNESS_PHASE_RESOLVED;
+use codex_rollout_trace::HARNESS_PHASE_RETRYING;
+use codex_rollout_trace::HARNESS_PHASE_STARTED;
+use codex_rollout_trace::HarnessTraceEvent;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -50,6 +57,29 @@ impl ToolOrchestrator {
         Self {
             sandbox: SandboxManager::new(),
         }
+    }
+
+    fn record_decision(
+        tool_ctx: &ToolCtx,
+        name: &'static str,
+        phase: &'static str,
+        outcome: &'static str,
+        reason: Option<&'static str>,
+        details: serde_json::Value,
+    ) {
+        let mut event = HarnessTraceEvent::new(HARNESS_CATEGORY_DECISION, name, phase)
+            .with_optional_step_id(tool_ctx.step_context.trace_step_id.clone())
+            .with_outcome(outcome)
+            .with_correlation("tool_call_id", tool_ctx.call_id.clone())
+            .with_details(details);
+        if let Some(reason) = reason {
+            event = event.with_reason(reason);
+        }
+        tool_ctx
+            .session
+            .services
+            .rollout_thread_trace
+            .record_harness_event(tool_ctx.step_context.turn.sub_id.clone(), event);
     }
 
     async fn run_attempt<Rq, Out, T>(
@@ -165,9 +195,31 @@ impl ToolOrchestrator {
             environment.permission_profile_with_workspace_roots()
         };
         let file_system_sandbox_policy = permissions.file_system_sandbox_policy();
-        let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
+        let configured_requirement = tool.exec_approval_requirement(req);
+        let requirement_source = if configured_requirement.is_some() {
+            "tool"
+        } else {
+            "default_policy"
+        };
+        let requirement = configured_requirement.unwrap_or_else(|| {
             default_exec_approval_requirement(approval_policy, &file_system_sandbox_policy)
         });
+        let (requirement_outcome, requirement_reason) = match &requirement {
+            ExecApprovalRequirement::Skip { .. } => ("skip", None),
+            ExecApprovalRequirement::NeedsApproval { .. } => ("needs_approval", None),
+            ExecApprovalRequirement::Forbidden { .. } => ("forbidden", Some("policy")),
+        };
+        Self::record_decision(
+            tool_ctx,
+            "approval_requirement",
+            HARNESS_PHASE_DECIDED,
+            requirement_outcome,
+            requirement_reason,
+            json!({
+                "source": requirement_source,
+                "strict_auto_review": strict_auto_review,
+            }),
+        );
         match &requirement {
             ExecApprovalRequirement::Skip { .. } => {
                 if strict_auto_review {
@@ -251,6 +303,19 @@ impl ToolOrchestrator {
         } else {
             SandboxType::None
         };
+        Self::record_decision(
+            tool_ctx,
+            "sandbox_selection",
+            HARNESS_PHASE_DECIDED,
+            initial_sandbox.as_metric_tag(),
+            None,
+            json!({
+                "sandbox_requested": sandbox_requested,
+                "bypass_first_attempt": matches!(sandbox_override, SandboxOverride::BypassSandboxFirstAttempt),
+                "executor_managed_process_sandbox": executor_managed_process_sandbox,
+                "managed_network": managed_network_active,
+            }),
+        );
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial.
         let use_legacy_landlock = turn_ctx.config.features.use_legacy_landlock();
@@ -279,6 +344,14 @@ impl ToolOrchestrator {
         };
 
         let initial_attempt_start = Instant::now();
+        Self::record_decision(
+            tool_ctx,
+            "sandbox_attempt",
+            HARNESS_PHASE_STARTED,
+            "first",
+            None,
+            json!({"sandbox_type": initial_sandbox.as_metric_tag()}),
+        );
         let (first_result, first_deferred_network_approval) = Self::run_attempt(
             tool,
             req,
@@ -290,6 +363,14 @@ impl ToolOrchestrator {
         let initial_duration = initial_attempt_start.elapsed();
         match first_result {
             Ok(out) => {
+                Self::record_decision(
+                    tool_ctx,
+                    "sandbox_attempt",
+                    HARNESS_PHASE_RESOLVED,
+                    "completed",
+                    None,
+                    json!({"ordinal": 1, "sandbox_type": initial_sandbox.as_metric_tag()}),
+                );
                 // We have a successful initial result
                 Ok(OrchestratorRunResult {
                     output: out,
@@ -314,6 +395,14 @@ impl ToolOrchestrator {
                     }
                     return Err(err);
                 };
+                Self::record_decision(
+                    tool_ctx,
+                    "sandbox_attempt",
+                    HARNESS_PHASE_RESOLVED,
+                    "denied",
+                    Some("sandbox_denied"),
+                    json!({"ordinal": 1, "sandbox_type": initial_sandbox.as_metric_tag()}),
+                );
                 let network_approval_context = if managed_network_active {
                     network_policy_decision
                         .as_ref()
@@ -322,6 +411,14 @@ impl ToolOrchestrator {
                     None
                 };
                 if network_policy_decision.is_some() && network_approval_context.is_none() {
+                    Self::record_decision(
+                        tool_ctx,
+                        "sandbox_escalation",
+                        HARNESS_PHASE_DECIDED,
+                        "suppressed",
+                        Some("unrecognized_network_policy"),
+                        json!({"ordinal": 1}),
+                    );
                     otel.sandbox_outcome(
                         &otel_tn,
                         otel_ci,
@@ -332,6 +429,14 @@ impl ToolOrchestrator {
                     return Err(ToolError::Codex(err));
                 }
                 if !tool.escalate_on_failure() {
+                    Self::record_decision(
+                        tool_ctx,
+                        "sandbox_escalation",
+                        HARNESS_PHASE_DECIDED,
+                        "suppressed",
+                        Some("tool_disabled"),
+                        json!({"ordinal": 1}),
+                    );
                     otel.sandbox_outcome(
                         &otel_tn,
                         otel_ci,
@@ -358,6 +463,14 @@ impl ToolOrchestrator {
                                 ExecApprovalRequirement::NeedsApproval { .. }
                             );
                     if !allow_on_request_network_prompt {
+                        Self::record_decision(
+                            tool_ctx,
+                            "sandbox_escalation",
+                            HARNESS_PHASE_DECIDED,
+                            "suppressed",
+                            Some("approval_policy"),
+                            json!({"ordinal": 1}),
+                        );
                         otel.sandbox_outcome(
                             &otel_tn,
                             otel_ci,
@@ -369,6 +482,14 @@ impl ToolOrchestrator {
                     }
                 }
                 if !unsandboxed_allowed && network_approval_context.is_none() {
+                    Self::record_decision(
+                        tool_ctx,
+                        "sandbox_escalation",
+                        HARNESS_PHASE_DECIDED,
+                        "suppressed",
+                        Some("denied_reads"),
+                        json!({"ordinal": 1}),
+                    );
                     otel.sandbox_outcome(
                         &otel_tn,
                         otel_ci,
@@ -393,6 +514,18 @@ impl ToolOrchestrator {
                 let bypass_retry_approval = !strict_auto_review
                     && tool.should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();
+                Self::record_decision(
+                    tool_ctx,
+                    "sandbox_escalation",
+                    HARNESS_PHASE_DECIDED,
+                    "eligible",
+                    None,
+                    json!({
+                        "retry_approval": !bypass_retry_approval,
+                        "network_policy": network_approval_context.is_some(),
+                        "unsandboxed_allowed": unsandboxed_allowed,
+                    }),
+                );
                 if !bypass_retry_approval {
                     let approval_reason = match &requirement {
                         ExecApprovalRequirement::NeedsApproval { reason, .. } => reason.clone(),
@@ -464,12 +597,44 @@ impl ToolOrchestrator {
 
                 // Second attempt.
                 let escalated_attempt_start = Instant::now();
+                Self::record_decision(
+                    tool_ctx,
+                    "sandbox_escalation",
+                    HARNESS_PHASE_RETRYING,
+                    "requested",
+                    None,
+                    json!({"sandbox_type": retry_sandbox.as_metric_tag(), "retry_approval": !bypass_retry_approval}),
+                );
+                Self::record_decision(
+                    tool_ctx,
+                    "sandbox_attempt",
+                    HARNESS_PHASE_STARTED,
+                    "escalated",
+                    None,
+                    json!({"ordinal": 2, "sandbox_type": retry_sandbox.as_metric_tag()}),
+                );
                 let (retry_result, retry_deferred_network_approval) =
                     Self::run_attempt(tool, req, tool_ctx, &retry_attempt, managed_network_active)
                         .await;
                 let escalated_duration = escalated_attempt_start.elapsed();
                 match retry_result {
                     Ok(output) => {
+                        Self::record_decision(
+                            tool_ctx,
+                            "sandbox_attempt",
+                            HARNESS_PHASE_RESOLVED,
+                            "completed",
+                            None,
+                            json!({"ordinal": 2, "sandbox_type": retry_sandbox.as_metric_tag()}),
+                        );
+                        Self::record_decision(
+                            tool_ctx,
+                            "sandbox_escalation",
+                            HARNESS_PHASE_RESOLVED,
+                            "approved",
+                            None,
+                            json!({"ordinal": 2}),
+                        );
                         otel.sandbox_outcome(
                             &otel_tn,
                             otel_ci,
@@ -483,6 +648,23 @@ impl ToolOrchestrator {
                         })
                     }
                     Err(err) => {
+                        let outcome = sandbox_outcome_from_tool_error(&err).unwrap_or("failed");
+                        Self::record_decision(
+                            tool_ctx,
+                            "sandbox_attempt",
+                            HARNESS_PHASE_RESOLVED,
+                            outcome,
+                            None,
+                            json!({"ordinal": 2, "sandbox_type": retry_sandbox.as_metric_tag()}),
+                        );
+                        Self::record_decision(
+                            tool_ctx,
+                            "sandbox_escalation",
+                            HARNESS_PHASE_RESOLVED,
+                            "denied",
+                            None,
+                            json!({"ordinal": 2, "outcome": outcome}),
+                        );
                         if let Some(outcome) = sandbox_outcome_from_tool_error(&err) {
                             otel.sandbox_outcome(
                                 &otel_tn,
@@ -497,6 +679,15 @@ impl ToolOrchestrator {
                 }
             }
             Err(err) => {
+                let outcome = sandbox_outcome_from_tool_error(&err).unwrap_or("failed");
+                Self::record_decision(
+                    tool_ctx,
+                    "sandbox_attempt",
+                    HARNESS_PHASE_RESOLVED,
+                    outcome,
+                    None,
+                    json!({"ordinal": 1, "sandbox_type": initial_sandbox.as_metric_tag()}),
+                );
                 if let Some(outcome) = sandbox_outcome_from_tool_error(&err) {
                     otel.sandbox_outcome(
                         &otel_tn,
