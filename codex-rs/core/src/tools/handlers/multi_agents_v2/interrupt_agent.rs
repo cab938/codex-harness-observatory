@@ -95,7 +95,19 @@ async fn handle_interrupt_agent(
         }
         Err(err) => Err(collab_agent_error(agent_id, err)),
     };
-    result?;
+    if let Err(err) = result {
+        record_multi_agent_event(
+            &session,
+            &turn,
+            step_context.trace_step_id.clone(),
+            multi_agent_event("agent_interrupt", "failed")
+                .with_reason("interrupt_error")
+                .with_correlation("parent_thread_id", session.thread_id.to_string())
+                .with_correlation("target_thread_id", agent_id.to_string())
+                .with_correlation("tool_call_id", call_id.clone()),
+        );
+        return Err(err);
+    }
     let resulting_status = session.services.agent_control.get_status(agent_id).await;
     record_multi_agent_event(
         &session,

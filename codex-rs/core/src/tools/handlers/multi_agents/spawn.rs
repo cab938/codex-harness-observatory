@@ -84,7 +84,9 @@ async fn handle_spawn_agent(
         &session,
         turn,
         step_context.trace_step_id.clone(),
-        multi_agent_event("agent_spawn_admission", "accepted")
+        multi_agent_event("agent_spawn_admission", "decided")
+            .with_outcome("depth_ok")
+            .with_reason("depth_check")
             .with_correlation("parent_thread_id", session.thread_id.to_string())
             .with_correlation("tool_call_id", call_id.clone())
             .with_details(json!({
@@ -173,26 +175,50 @@ async fn handle_spawn_agent(
     ))
     .await;
     match &result {
-        Ok(spawned_agent) => record_multi_agent_event(
-            &session,
-            turn,
-            step_context.trace_step_id.clone(),
-            multi_agent_event("agent_spawn", "started")
-                .with_correlation("parent_thread_id", session.thread_id.to_string())
-                .with_correlation("child_thread_id", spawned_agent.thread_id.to_string())
-                .with_correlation("tool_call_id", call_id.clone())
-                .with_details(json!({"child_depth": child_depth})),
-        ),
-        Err(_) => record_multi_agent_event(
-            &session,
-            turn,
-            step_context.trace_step_id.clone(),
-            multi_agent_event("agent_spawn", "failed")
-                .with_reason("spawn_error")
-                .with_correlation("parent_thread_id", session.thread_id.to_string())
-                .with_correlation("tool_call_id", call_id.clone())
-                .with_details(json!({"child_depth": child_depth})),
-        ),
+        Ok(spawned_agent) => {
+            record_multi_agent_event(
+                &session,
+                turn,
+                step_context.trace_step_id.clone(),
+                multi_agent_event("agent_spawn_admission", "resolved")
+                    .with_outcome("accepted")
+                    .with_correlation("parent_thread_id", session.thread_id.to_string())
+                    .with_correlation("child_thread_id", spawned_agent.thread_id.to_string())
+                    .with_correlation("tool_call_id", call_id.clone()),
+            );
+            record_multi_agent_event(
+                &session,
+                turn,
+                step_context.trace_step_id.clone(),
+                multi_agent_event("agent_spawn", "started")
+                    .with_correlation("parent_thread_id", session.thread_id.to_string())
+                    .with_correlation("child_thread_id", spawned_agent.thread_id.to_string())
+                    .with_correlation("tool_call_id", call_id.clone())
+                    .with_details(json!({"child_depth": child_depth})),
+            );
+        }
+        Err(err) => {
+            let reason = spawn_admission_failure_reason(err);
+            record_multi_agent_event(
+                &session,
+                turn,
+                step_context.trace_step_id.clone(),
+                multi_agent_event("agent_spawn_admission", "rejected")
+                    .with_reason(reason)
+                    .with_correlation("parent_thread_id", session.thread_id.to_string())
+                    .with_correlation("tool_call_id", call_id.clone()),
+            );
+            record_multi_agent_event(
+                &session,
+                turn,
+                step_context.trace_step_id.clone(),
+                multi_agent_event("agent_spawn", "failed")
+                    .with_reason(reason)
+                    .with_correlation("parent_thread_id", session.thread_id.to_string())
+                    .with_correlation("tool_call_id", call_id.clone())
+                    .with_details(json!({"child_depth": child_depth})),
+            );
+        }
     }
     let result = result.map_err(collab_spawn_error);
     let (new_thread_id, new_agent_metadata, status) = match &result {

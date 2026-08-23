@@ -205,9 +205,14 @@ impl InputQueue {
             })
             .reduce(|expected, candidate| expected.filter(|id| candidate == Some(*id)))
             .and_then(|id| id.filter(|id| !id.trim().is_empty()).map(str::to_string));
-        let message_ids = pending_mails
+        let delivery_metadata = pending_mails
             .iter()
-            .filter_map(|mail| mail.communication.id.as_ref().map(ToString::to_string))
+            .map(|mail| {
+                (
+                    mail.communication.id.as_ref().map(ToString::to_string),
+                    mail.communication.trigger_turn,
+                )
+            })
             .collect::<Vec<_>>();
         let trigger_turn_count = pending_mails
             .iter()
@@ -217,15 +222,18 @@ impl InputQueue {
             .into_iter()
             .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
             .collect();
-        if !items.is_empty() {
-            self.trace.record_thread_harness_event(
+        for (message_id, trigger_turn) in delivery_metadata {
+            let mut event =
                 HarnessTraceEvent::new(HARNESS_CATEGORY_MULTI_AGENT, "agent_message", "delivered")
                     .with_details(json!({
-                        "message_count": items.len(),
-                        "trigger_turn_count": trigger_turn_count,
-                        "message_ids": message_ids
-                    })),
-            );
+                        "batch_size": items.len(),
+                        "batch_trigger_turn_count": trigger_turn_count,
+                        "trigger_turn": trigger_turn
+                    }));
+            if let Some(message_id) = message_id {
+                event = event.with_correlation("message_id", message_id);
+            }
+            self.trace.record_thread_harness_event(event);
         }
         (items, parent_turn_id, root_turn_id)
     }

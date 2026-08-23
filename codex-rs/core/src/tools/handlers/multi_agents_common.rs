@@ -56,6 +56,14 @@ pub(crate) fn agent_status_name(status: &crate::agent::AgentStatus) -> &'static 
     }
 }
 
+pub(crate) fn spawn_admission_failure_reason(err: &CodexErr) -> &'static str {
+    match err.details() {
+        CodexErrorDetails::AgentLimitReached { .. } => "thread_limit",
+        CodexErrorDetails::UnsupportedOperation(_) => "unsupported_operation",
+        _ => "spawn_error",
+    }
+}
+
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;

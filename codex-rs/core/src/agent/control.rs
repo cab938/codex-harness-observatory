@@ -618,6 +618,9 @@ impl AgentControl {
                 return;
             };
             parent_thread
+                .inject_user_message_without_turn(message)
+                .await;
+            parent_thread
                 .session
                 .services
                 .rollout_thread_trace
@@ -631,9 +634,6 @@ impl AgentControl {
                     .with_correlation("child_thread_id", child_thread_id.to_string())
                     .with_details(json!({"child_status": agent_status_name(&status)})),
                 );
-            parent_thread
-                .inject_user_message_without_turn(message)
-                .await;
         });
     }
 
