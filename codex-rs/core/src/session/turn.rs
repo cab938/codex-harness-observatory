@@ -34,6 +34,7 @@ use crate::responses_retry::ResponsesStreamRetryState;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
+use crate::session::input_queue::PendingInputKind;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -104,6 +105,15 @@ use codex_protocol::protocol::SafetyBufferingEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_rollout_trace::HARNESS_CATEGORY_AGENT_LOOP;
+use codex_rollout_trace::HARNESS_CATEGORY_CONTEXT;
+use codex_rollout_trace::HARNESS_PHASE_CANCELLED;
+use codex_rollout_trace::HARNESS_PHASE_COMPLETED;
+use codex_rollout_trace::HARNESS_PHASE_DECIDED;
+use codex_rollout_trace::HARNESS_PHASE_FAILED;
+use codex_rollout_trace::HARNESS_PHASE_REQUESTED;
+use codex_rollout_trace::HARNESS_PHASE_STARTED;
+use codex_rollout_trace::HarnessTraceEvent;
 use codex_skills::ToolMentionKind;
 use codex_skills::app_id_from_path;
 use codex_skills::build_skill_name_counts;
@@ -124,6 +134,7 @@ use codex_utils_stream_parser::strip_citations;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::error;
@@ -354,6 +365,28 @@ pub(crate) async fn run_turn(
                 .await?
             }
         };
+        let pending_user_input_count = pending_input
+            .iter()
+            .filter(|input| matches!(input, TurnInput::UserInput { .. }))
+            .count();
+        let pending_mailbox_input_count = pending_input
+            .iter()
+            .filter(|input| matches!(input, TurnInput::InterAgentCommunication(_)))
+            .count();
+        record_step_harness_event(
+            sess.as_ref(),
+            step_context.as_ref(),
+            HarnessTraceEvent::new(
+                HARNESS_CATEGORY_AGENT_LOOP,
+                "agent_step",
+                HARNESS_PHASE_STARTED,
+            )
+            .with_details(json!({
+                "pending_input_count": pending_input.len(),
+                "pending_user_input_count": pending_user_input_count,
+                "pending_mailbox_input_count": pending_mailbox_input_count,
+            })),
+        );
         let sampling_request_result: CodexResult<_> = async {
             super::time_reminder::maybe_record_current_time_reminder(
                 sess.as_ref(),
@@ -395,6 +428,15 @@ pub(crate) async fn run_turn(
         .await;
         match sampling_request_result {
             Ok((sampling_request_output, sampling_request_input)) => {
+                record_step_harness_event(
+                    sess.as_ref(),
+                    step_context.as_ref(),
+                    HarnessTraceEvent::new(
+                        HARNESS_CATEGORY_AGENT_LOOP,
+                        "agent_step",
+                        HARNESS_PHASE_COMPLETED,
+                    ),
+                );
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
@@ -410,15 +452,17 @@ pub(crate) async fn run_turn(
                 can_drain_pending_input = true;
                 // Process async hooks only after sampling and its tools have finished.
                 drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ false).await;
-                let (has_pending_input, token_status) = async {
+                let (has_pending_input, pending_input_kind, token_status) = async {
                     let has_pending_input =
                         sess.input_queue.has_pending_input(&sess.active_turn).await;
+                    let pending_input_kind =
+                        sess.input_queue.pending_input_kind(&sess.active_turn).await;
                     let token_status = super::context_window::context_window_token_status(
                         sess.as_ref(),
                         turn_context.as_ref(),
                     )
                     .await;
-                    (has_pending_input, token_status)
+                    (has_pending_input, pending_input_kind, token_status)
                 }
                 .instrument(trace_span!("run_turn.collect_post_sampling_state"))
                 .await;
@@ -457,8 +501,50 @@ pub(crate) async fn run_turn(
                     );
                 }
 
-                let should_roll_over = needs_follow_up
-                    && (sess.take_new_context_window_request().await || token_limit_reached);
+                let new_context_window_requested = if needs_follow_up {
+                    sess.take_new_context_window_request().await
+                } else {
+                    false
+                };
+                let should_roll_over =
+                    needs_follow_up && (new_context_window_requested || token_limit_reached);
+                let compaction_reason = if should_roll_over {
+                    if new_context_window_requested {
+                        "new_context_window_requested"
+                    } else {
+                        "token_limit_reached"
+                    }
+                } else if needs_follow_up {
+                    "below_context_limit"
+                } else {
+                    "no_follow_up"
+                };
+                record_step_harness_event(
+                    sess.as_ref(),
+                    step_context.as_ref(),
+                    HarnessTraceEvent::new(
+                        HARNESS_CATEGORY_CONTEXT,
+                        "compaction_decision",
+                        HARNESS_PHASE_DECIDED,
+                    )
+                    .with_outcome(if should_roll_over {
+                        "roll_over"
+                    } else {
+                        "retain_context"
+                    })
+                    .with_reason(compaction_reason)
+                    .with_details(json!({
+                        "active_context_tokens": token_status.active_context_tokens,
+                        "auto_compact_scope_tokens": token_status.auto_compact_scope_tokens,
+                        "auto_compact_scope_limit": token_status.auto_compact_scope_limit,
+                        "full_context_window_limit": token_status.full_context_window_limit,
+                        "full_context_window_limit_reached": token_status.full_context_window_limit_reached,
+                        "token_limit_reached": token_limit_reached,
+                        "new_context_window_requested": new_context_window_requested,
+                        "model_needs_follow_up": model_needs_follow_up,
+                        "has_pending_input": has_pending_input,
+                    })),
+                );
                 let allow_auto_compact_fallback = !should_roll_over && !token_limit_reached;
                 super::token_budget::maybe_record(
                     sess.as_ref(),
@@ -470,6 +556,17 @@ pub(crate) async fn run_turn(
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if should_roll_over {
+                    record_step_harness_event(
+                        sess.as_ref(),
+                        step_context.as_ref(),
+                        HarnessTraceEvent::new(
+                            HARNESS_CATEGORY_AGENT_LOOP,
+                            "agent_step_next_action",
+                            HARNESS_PHASE_DECIDED,
+                        )
+                        .with_outcome("continue_compaction_context_rollover")
+                        .with_reason(compaction_reason),
+                    );
                     if let Err(err) = run_auto_compact(
                         &sess,
                         Arc::clone(&step_context),
@@ -512,6 +609,20 @@ pub(crate) async fn run_turn(
                         if let Some(hook_prompt_message) =
                             build_hook_prompt_message(&stop_outcome.continuation_fragments)
                         {
+                            record_step_harness_event(
+                                sess.as_ref(),
+                                step_context.as_ref(),
+                                HarnessTraceEvent::new(
+                                    HARNESS_CATEGORY_AGENT_LOOP,
+                                    "agent_step_next_action",
+                                    HARNESS_PHASE_DECIDED,
+                                )
+                                .with_outcome("continue_stop_hook")
+                                .with_reason("stop_hook_prompt")
+                                .with_details(json!({
+                                    "continuation_fragment_count": stop_outcome.continuation_fragments.len(),
+                                })),
+                            );
                             sess.record_response_item_and_emit_turn_item(
                                 &turn_context,
                                 hook_prompt_message,
@@ -536,6 +647,17 @@ pub(crate) async fn run_turn(
                         }
                     }
                     if stop_outcome.should_stop {
+                        record_step_harness_event(
+                            sess.as_ref(),
+                            step_context.as_ref(),
+                            HarnessTraceEvent::new(
+                                HARNESS_CATEGORY_AGENT_LOOP,
+                                "agent_step_next_action",
+                                HARNESS_PHASE_DECIDED,
+                            )
+                            .with_outcome("complete")
+                            .with_reason("stop_hook"),
+                        );
                         break;
                     }
                     if run_legacy_after_agent_hook(
@@ -546,13 +668,85 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
+                        record_step_harness_event(
+                            sess.as_ref(),
+                            step_context.as_ref(),
+                            HarnessTraceEvent::new(
+                                HARNESS_CATEGORY_AGENT_LOOP,
+                                "agent_step_next_action",
+                                HARNESS_PHASE_DECIDED,
+                            )
+                            .with_outcome("complete")
+                            .with_reason("legacy_after_agent_hook"),
+                        );
                         return Ok(None);
                     }
+                    record_step_harness_event(
+                        sess.as_ref(),
+                        step_context.as_ref(),
+                        HarnessTraceEvent::new(
+                            HARNESS_CATEGORY_AGENT_LOOP,
+                            "agent_step_next_action",
+                            HARNESS_PHASE_DECIDED,
+                        )
+                        .with_outcome("complete")
+                        .with_reason("model_completed"),
+                    );
                     break;
                 }
+                let (outcome, reason) = if model_needs_follow_up {
+                    (
+                        "continue_tool_or_model_follow_up",
+                        "model_requested_follow_up",
+                    )
+                } else {
+                    match pending_input_kind {
+                        PendingInputKind::User => {
+                            ("continue_pending_user_input", "pending_user_input")
+                        }
+                        PendingInputKind::Mailbox => {
+                            ("continue_mailbox_delivery", "pending_mailbox_delivery")
+                        }
+                        PendingInputKind::Other | PendingInputKind::None => {
+                            ("continue_pending_input", "pending_input")
+                        }
+                    }
+                };
+                record_step_harness_event(
+                    sess.as_ref(),
+                    step_context.as_ref(),
+                    HarnessTraceEvent::new(
+                        HARNESS_CATEGORY_AGENT_LOOP,
+                        "agent_step_next_action",
+                        HARNESS_PHASE_DECIDED,
+                    )
+                    .with_outcome(outcome)
+                    .with_reason(reason),
+                );
                 continue;
             }
             Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
+                record_step_harness_event(
+                    sess.as_ref(),
+                    step_context.as_ref(),
+                    HarnessTraceEvent::new(
+                        HARNESS_CATEGORY_AGENT_LOOP,
+                        "agent_step",
+                        HARNESS_PHASE_CANCELLED,
+                    )
+                    .with_reason("turn_aborted"),
+                );
+                record_step_harness_event(
+                    sess.as_ref(),
+                    step_context.as_ref(),
+                    HarnessTraceEvent::new(
+                        HARNESS_CATEGORY_AGENT_LOOP,
+                        "agent_step_next_action",
+                        HARNESS_PHASE_DECIDED,
+                    )
+                    .with_outcome("abort")
+                    .with_reason("turn_aborted"),
+                );
                 return Err(err);
             }
             Err(codex_error)
@@ -561,6 +755,27 @@ pub(crate) async fn run_turn(
                     CodexErrorDetails::InvalidImageRequest()
                 ) =>
             {
+                record_step_harness_event(
+                    sess.as_ref(),
+                    step_context.as_ref(),
+                    HarnessTraceEvent::new(
+                        HARNESS_CATEGORY_AGENT_LOOP,
+                        "agent_step",
+                        HARNESS_PHASE_FAILED,
+                    )
+                    .with_reason("invalid_image_request"),
+                );
+                record_step_harness_event(
+                    sess.as_ref(),
+                    step_context.as_ref(),
+                    HarnessTraceEvent::new(
+                        HARNESS_CATEGORY_AGENT_LOOP,
+                        "agent_step_next_action",
+                        HARNESS_PHASE_DECIDED,
+                    )
+                    .with_outcome("failure")
+                    .with_reason("invalid_image_request"),
+                );
                 sess.track_turn_codex_error(turn_context.as_ref(), &codex_error);
                 let error = CodexErrorInfo::BadRequest;
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
@@ -574,6 +789,27 @@ pub(crate) async fn run_turn(
                 break;
             }
             Err(e) => {
+                record_step_harness_event(
+                    sess.as_ref(),
+                    step_context.as_ref(),
+                    HarnessTraceEvent::new(
+                        HARNESS_CATEGORY_AGENT_LOOP,
+                        "agent_step",
+                        HARNESS_PHASE_FAILED,
+                    )
+                    .with_reason("sampling_error"),
+                );
+                record_step_harness_event(
+                    sess.as_ref(),
+                    step_context.as_ref(),
+                    HarnessTraceEvent::new(
+                        HARNESS_CATEGORY_AGENT_LOOP,
+                        "agent_step_next_action",
+                        HARNESS_PHASE_DECIDED,
+                    )
+                    .with_outcome("failure")
+                    .with_reason("sampling_error"),
+                );
                 info!("Turn error: {e:#}");
                 let error = e.to_codex_protocol_error();
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
@@ -588,6 +824,30 @@ pub(crate) async fn run_turn(
     }
 
     Ok(last_agent_message)
+}
+
+fn record_step_harness_event(sess: &Session, step_context: &StepContext, event: HarnessTraceEvent) {
+    sess.services.rollout_thread_trace.record_harness_event(
+        &step_context.turn.sub_id,
+        event.with_optional_step_id(step_context.trace_step_id.clone()),
+    );
+}
+
+fn compaction_reason_name(reason: CompactionReason) -> &'static str {
+    match reason {
+        CompactionReason::UserRequested => "user_requested",
+        CompactionReason::ContextLimit => "context_limit",
+        CompactionReason::ModelDownshift => "model_downshift",
+        CompactionReason::CompHashChanged => "comp_hash_changed",
+    }
+}
+
+fn compaction_phase_name(phase: CompactionPhase) -> &'static str {
+    match phase {
+        CompactionPhase::StandaloneTurn => "standalone_turn",
+        CompactionPhase::PreTurn => "pre_turn",
+        CompactionPhase::MidTurn => "mid_turn",
+    }
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -1187,6 +1447,38 @@ async fn run_auto_compact(
     phase: CompactionPhase,
 ) -> CodexResult<()> {
     let turn_context = &step_context.turn;
+    let implementation = if turn_context.config.features.enabled(Feature::TokenBudget) {
+        "token_budget"
+    } else {
+        match turn_context.provider.capabilities().remote_compaction {
+            RemoteCompactionSupport::V2
+                if turn_context
+                    .config
+                    .features
+                    .enabled(Feature::RemoteCompactionV2) =>
+            {
+                "remote_v2"
+            }
+            RemoteCompactionSupport::V1 | RemoteCompactionSupport::V2 => "remote_v1",
+            RemoteCompactionSupport::Unsupported => "local",
+        }
+    };
+    record_step_harness_event(
+        sess.as_ref(),
+        step_context.as_ref(),
+        HarnessTraceEvent::new(
+            HARNESS_CATEGORY_CONTEXT,
+            "compaction_decision",
+            HARNESS_PHASE_DECIDED,
+        )
+        .with_outcome("roll_over")
+        .with_reason(compaction_reason_name(reason))
+        .with_details(json!({
+            "phase": compaction_phase_name(phase),
+            "implementation": implementation,
+            "has_fallback_step": fallback_step_context.is_some(),
+        })),
+    );
     let _profile_guard = turn_context.turn_timing_state.begin_compaction();
     if turn_context.config.features.enabled(Feature::TokenBudget) {
         // Compaction is the reset request, so force a new context window
@@ -1367,6 +1659,7 @@ async fn run_sampling_request(
     let mut initial_input = Some(input);
     let mut original_input = None;
     let mut executed_tool_calls_by_output = HashMap::new();
+    let mut sampling_attempt = 0_u32;
     loop {
         let prompt_input = if let Some(input) = initial_input.take() {
             input
@@ -1387,7 +1680,21 @@ async fn run_sampling_request(
             step_context.as_ref(),
             base_instructions.clone(),
         );
-        let err = match try_run_sampling_request(
+        sampling_attempt += 1;
+        record_step_harness_event(
+            sess.as_ref(),
+            step_context.as_ref(),
+            HarnessTraceEvent::new(
+                HARNESS_CATEGORY_AGENT_LOOP,
+                "sampling_request",
+                HARNESS_PHASE_REQUESTED,
+            )
+            .with_details(json!({
+                "attempt": sampling_attempt,
+                "prompt_item_count": prompt.input.len(),
+            })),
+        );
+        let sampling_result = try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
             Arc::clone(&step_context),
@@ -1398,25 +1705,56 @@ async fn run_sampling_request(
             &prompt,
             cancellation_token.child_token(),
         )
-        .await
-        {
+        .await;
+        let err = match sampling_result {
             Ok(output) => {
+                record_step_harness_event(
+                    sess.as_ref(),
+                    step_context.as_ref(),
+                    HarnessTraceEvent::new(
+                        HARNESS_CATEGORY_AGENT_LOOP,
+                        "sampling_request",
+                        HARNESS_PHASE_COMPLETED,
+                    )
+                    .with_details(json!({ "attempt": sampling_attempt })),
+                );
                 return Ok((output, original_input.unwrap_or(prompt.input)));
             }
-            Err(err) => match err.details() {
-                CodexErrorDetails::ContextWindowExceeded => {
-                    sess.set_total_tokens_full(&turn_context).await;
-                    return Err(err);
-                }
-                CodexErrorDetails::UsageLimitReached(e) => {
-                    let rate_limits = e.rate_limits.clone();
-                    if let Some(rate_limits) = rate_limits {
-                        sess.update_rate_limits(&turn_context, *rate_limits).await;
+            Err(err) => {
+                let phase = if matches!(err.details(), CodexErrorDetails::TurnAborted) {
+                    HARNESS_PHASE_CANCELLED
+                } else {
+                    HARNESS_PHASE_FAILED
+                };
+                let reason = if matches!(err.details(), CodexErrorDetails::TurnAborted) {
+                    "turn_aborted"
+                } else if err.is_retryable() {
+                    "retryable_error"
+                } else {
+                    "sampling_error"
+                };
+                record_step_harness_event(
+                    sess.as_ref(),
+                    step_context.as_ref(),
+                    HarnessTraceEvent::new(HARNESS_CATEGORY_AGENT_LOOP, "sampling_request", phase)
+                        .with_reason(reason)
+                        .with_details(json!({ "attempt": sampling_attempt })),
+                );
+                match err.details() {
+                    CodexErrorDetails::ContextWindowExceeded => {
+                        sess.set_total_tokens_full(&turn_context).await;
+                        return Err(err);
                     }
-                    return Err(err);
+                    CodexErrorDetails::UsageLimitReached(e) => {
+                        let rate_limits = e.rate_limits.clone();
+                        if let Some(rate_limits) = rate_limits {
+                            sess.update_rate_limits(&turn_context, *rate_limits).await;
+                        }
+                        return Err(err);
+                    }
+                    _ => err,
                 }
-                _ => err,
-            },
+            }
         };
 
         if original_input.is_none() {

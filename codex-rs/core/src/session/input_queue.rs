@@ -67,6 +67,14 @@ pub(crate) enum InputQueueActivity {
     Steer,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PendingInputKind {
+    None,
+    User,
+    Mailbox,
+    Other,
+}
+
 /// Turn-local pending input storage owned by the input queue flow.
 #[derive(Default)]
 pub(crate) struct TurnInputQueue {
@@ -361,6 +369,31 @@ impl InputQueue {
         }
         self.has_pending_mailbox_items().await
     }
+
+    pub(crate) async fn pending_input_kind(
+        &self,
+        active_turn: &Mutex<Option<ActiveTurn>>,
+    ) -> PendingInputKind {
+        let (turn_input_kind, accepts_mailbox_delivery) = {
+            let active = active_turn.lock().await;
+            let Some(active_turn) = active.as_ref() else {
+                return PendingInputKind::None;
+            };
+            let turn_state = active_turn.turn_state.lock().await;
+            (
+                pending_input_kind(&turn_state.pending_input.items),
+                turn_state.accepts_mailbox_delivery_for_current_turn(),
+            )
+        };
+        if turn_input_kind != PendingInputKind::None {
+            return turn_input_kind;
+        }
+        if accepts_mailbox_delivery && self.has_pending_mailbox_items().await {
+            PendingInputKind::Mailbox
+        } else {
+            PendingInputKind::None
+        }
+    }
 }
 
 impl TurnInputQueue {
@@ -368,6 +401,24 @@ impl TurnInputQueue {
         self.items
             .iter()
             .any(|input| matches!(input, TurnInput::UserInput { .. }))
+    }
+}
+
+fn pending_input_kind(input: &[TurnInput]) -> PendingInputKind {
+    if input
+        .iter()
+        .any(|item| matches!(item, TurnInput::UserInput { .. }))
+    {
+        PendingInputKind::User
+    } else if input
+        .iter()
+        .any(|item| matches!(item, TurnInput::InterAgentCommunication(_)))
+    {
+        PendingInputKind::Mailbox
+    } else if input.is_empty() {
+        PendingInputKind::None
+    } else {
+        PendingInputKind::Other
     }
 }
 
@@ -423,6 +474,41 @@ mod tests {
             content.to_string(),
             trigger_turn,
         )
+    }
+
+    #[test]
+    fn pending_input_kind_prioritizes_user_steering_over_mailbox_delivery() {
+        let mail = make_mail(
+            AgentPath::root(),
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            "result",
+            /*trigger_turn*/ true,
+        );
+        let user = TurnInput::UserInput {
+            content: vec![UserInput::Text {
+                text: "steer".to_string(),
+                text_elements: Vec::new(),
+            }],
+            client_id: None,
+        };
+
+        assert_eq!(pending_input_kind(&[]), PendingInputKind::None);
+        assert_eq!(
+            pending_input_kind(&[TurnInput::InterAgentCommunication(mail)]),
+            PendingInputKind::Mailbox
+        );
+        assert_eq!(
+            pending_input_kind(&[
+                TurnInput::InterAgentCommunication(make_mail(
+                    AgentPath::root(),
+                    AgentPath::try_from("/root/worker").expect("agent path"),
+                    "result",
+                    /*trigger_turn*/ true,
+                )),
+                user,
+            ]),
+            PendingInputKind::User
+        );
     }
 
     #[tokio::test]
