@@ -218,6 +218,7 @@ impl StepContext {
             approvals_reviewer: turn.config.approvals_reviewer,
             session_telemetry: turn.session_telemetry.clone(),
             turn: Arc::clone(&turn),
+            trace_step_id: None,
             environments,
             selected_capability_roots: Vec::new(),
             executor_capability_discovery: None,

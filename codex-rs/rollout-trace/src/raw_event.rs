@@ -1,5 +1,6 @@
 //! Append-only raw trace events.
 
+use crate::HarnessTraceEvent;
 use crate::model::AgentThreadId;
 use crate::model::CodeCellRuntimeStatus;
 use crate::model::CodexTurnId;
@@ -23,7 +24,7 @@ use serde_json::Value;
 pub type RawEventSeq = u64;
 
 /// Current raw event envelope schema version.
-pub(crate) const RAW_TRACE_EVENT_SCHEMA_VERSION: u32 = 1;
+pub(crate) const RAW_TRACE_EVENT_SCHEMA_VERSION: u32 = 2;
 
 /// One append-only raw trace event.
 ///
@@ -221,6 +222,10 @@ pub enum RawTraceEventPayload {
         event_type: String,
         event_payload: RawPayloadRef,
     },
+    /// Source-local transition or decision in the Codex agent harness.
+    HarnessEventObserved {
+        event: HarnessTraceEvent,
+    },
     /// Structured payload for early instrumentation before a dedicated variant exists.
     Other {
         kind: String,
@@ -272,6 +277,7 @@ impl RawTraceEventPayload {
                 event_payload: request_payload,
                 ..
             } => vec![request_payload],
+            RawTraceEventPayload::HarnessEventObserved { event } => event.payloads.iter().collect(),
             RawTraceEventPayload::InferenceFailed {
                 partial_response_payload,
                 ..

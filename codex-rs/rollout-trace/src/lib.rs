@@ -9,6 +9,7 @@
 mod bundle;
 mod code_cell;
 mod compaction;
+mod harness;
 mod inference;
 mod mcp;
 mod model;
@@ -30,6 +31,8 @@ pub use compaction::CompactionCheckpointTracePayload;
 pub use compaction::CompactionTraceAttempt;
 /// Shared recorder context for a compaction checkpoint.
 pub use compaction::CompactionTraceContext;
+/// Generic teaching-oriented harness event and its stable category/phase vocabulary.
+pub use harness::*;
 /// No-op-capable handle for recording one upstream inference attempt.
 pub use inference::InferenceTraceAttempt;
 /// Shared recorder context for inference attempts within one Codex turn.

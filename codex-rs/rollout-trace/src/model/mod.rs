@@ -85,6 +85,8 @@ pub struct RolloutTrace {
     pub compaction_requests: BTreeMap<CompactionRequestId, CompactionRequest>,
     /// Information-flow edges between threads, cells, tools, and runtime resources.
     pub interaction_edges: BTreeMap<EdgeId, InteractionEdge>,
+    /// Fine-grained source-local harness transitions in raw event order.
+    pub harness_events: Vec<crate::HarnessEvent>,
     /// Raw JSON payloads keyed by raw-payload ID. Most point at files outside this object.
     pub raw_payloads: BTreeMap<RawPayloadId, RawPayloadRef>,
 }
@@ -117,6 +119,7 @@ impl RolloutTrace {
             compactions: BTreeMap::new(),
             compaction_requests: BTreeMap::new(),
             interaction_edges: BTreeMap::new(),
+            harness_events: Vec::new(),
             raw_payloads: BTreeMap::new(),
         }
     }

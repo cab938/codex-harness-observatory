@@ -12,6 +12,8 @@ use serde::Serialize;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use tracing::debug;
 use tracing::warn;
 use uuid::Uuid;
@@ -21,6 +23,8 @@ use crate::CodeCellTraceContext;
 use crate::CodexTurnId;
 use crate::CompactionId;
 use crate::CompactionTraceContext;
+use crate::HarnessStepId;
+use crate::HarnessTraceEvent;
 use crate::InferenceTraceContext;
 use crate::McpCallTraceContext;
 use crate::RawPayloadKind;
@@ -88,6 +92,7 @@ struct EnabledThreadTraceContext {
     writer: Arc<TraceWriter>,
     root_thread_id: AgentThreadId,
     thread_id: AgentThreadId,
+    next_step_ordinal: Arc<AtomicU64>,
 }
 
 impl ThreadTraceContext {
@@ -138,6 +143,7 @@ impl ThreadTraceContext {
             writer,
             root_thread_id,
             thread_id: metadata.thread_id.clone(),
+            next_step_ordinal: Arc::new(AtomicU64::new(1)),
         };
         record_thread_started(&context, metadata);
         Self {
@@ -210,6 +216,43 @@ impl ThreadTraceContext {
         context.append_best_effort(RawTraceEventPayload::ProtocolEventObserved {
             event_type: event_type.to_string(),
             event_payload,
+        });
+    }
+
+    /// Allocates a readable trace-only step id for one model sampling cycle.
+    pub fn next_step_id(&self, codex_turn_id: &str) -> Option<HarnessStepId> {
+        let ThreadTraceContextState::Enabled(context) = &self.state else {
+            return None;
+        };
+        let ordinal = context.next_step_ordinal.fetch_add(1, Ordering::Relaxed);
+        Some(format!(
+            "step:{}:{codex_turn_id}:{ordinal}",
+            context.thread_id
+        ))
+    }
+
+    /// Records a source-local harness event within one Codex turn.
+    pub fn record_harness_event(
+        &self,
+        codex_turn_id: impl Into<CodexTurnId>,
+        event: HarnessTraceEvent,
+    ) {
+        let ThreadTraceContextState::Enabled(context) = &self.state else {
+            return;
+        };
+        context.append_with_context_best_effort(
+            codex_turn_id.into(),
+            RawTraceEventPayload::HarnessEventObserved { event },
+        );
+    }
+
+    /// Records a source-local harness event that is scoped to a thread but not a turn.
+    pub fn record_thread_harness_event(&self, event: HarnessTraceEvent) {
+        let ThreadTraceContextState::Enabled(context) = &self.state else {
+            return;
+        };
+        context.append_thread_context_best_effort(RawTraceEventPayload::HarnessEventObserved {
+            event,
         });
     }
 
@@ -517,6 +560,16 @@ impl EnabledThreadTraceContext {
         let event_context = RawTraceEventContext {
             thread_id: Some(self.thread_id.clone()),
             codex_turn_id: Some(codex_turn_id),
+        };
+        if let Err(err) = self.writer.append_with_context(event_context, payload) {
+            warn!("failed to append rollout trace event: {err:#}");
+        }
+    }
+
+    fn append_thread_context_best_effort(&self, payload: RawTraceEventPayload) {
+        let event_context = RawTraceEventContext {
+            thread_id: Some(self.thread_id.clone()),
+            codex_turn_id: None,
         };
         if let Err(err) = self.writer.append_with_context(event_context, payload) {
             warn!("failed to append rollout trace event: {err:#}");

@@ -236,6 +236,19 @@ impl TraceReducer {
                 // the reduced graph, so these payload refs are retained without
                 // creating semantic objects.
             }
+            RawTraceEventPayload::HarnessEventObserved {
+                event: harness_event,
+            } => {
+                self.rollout
+                    .harness_events
+                    .push(crate::HarnessEvent::from_raw(
+                        event.seq,
+                        event.wall_time_unix_ms,
+                        event.thread_id,
+                        event.codex_turn_id,
+                        harness_event,
+                    ));
+            }
             RawTraceEventPayload::ToolCallStarted {
                 tool_call_id,
                 model_visible_call_id,

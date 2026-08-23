@@ -17,6 +17,8 @@ use codex_protocol::protocol::AskForApproval;
 /// Request-scoped state that may change between model sampling requests.
 pub(crate) struct StepContext {
     pub(crate) turn: Arc<TurnContext>,
+    /// Trace-only identity shared by the decisions and tools in this sampling cycle.
+    pub(crate) trace_step_id: Option<codex_rollout_trace::HarnessStepId>,
     /// Concrete model and capabilities used by this sampling request.
     pub(crate) model_info: Arc<ModelInfo>,
     /// Reasoning effort selected for this sampling request.

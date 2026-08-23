@@ -3236,6 +3236,10 @@ impl Session {
         )
         .or_cancel(cancellation_token)
         .await??;
+        let trace_step_id = self
+            .services
+            .rollout_thread_trace
+            .next_step_id(&turn_context.sub_id);
         Ok(Arc::new(StepContext {
             model_info: Arc::clone(&turn_context.model_info),
             reasoning_effort: turn_context.reasoning_effort.clone(),
@@ -3245,6 +3249,7 @@ impl Session {
             approvals_reviewer: turn_context.config.approvals_reviewer,
             session_telemetry: turn_context.session_telemetry.clone(),
             turn: turn_context,
+            trace_step_id,
             environments,
             selected_capability_roots,
             executor_capability_discovery,
