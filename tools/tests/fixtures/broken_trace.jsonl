@@ -1,0 +1,4 @@
+{"schema_version":2,"seq":1,"wall_time_unix_ms":1000,"payload":{"type":"harness_event_observed","event":{"category":"context","name":"step_context_capture","phase":"started","step_id":"step-1"}}}
+{"schema_version":2,"seq":3,"wall_time_unix_ms":1010,"payload":{"type":"harness_event_observed","event":{"category":"agent_loop","name":"agent_step","phase":"started","details":{"iteration":1}}}}
+{"schema_version":2,"seq":2,"wall_time_unix_ms":1020,"payload":{"type":"harness_event_observed","event":{"category":"supervision","name":"hook_invocation","phase":"completed","correlations":{"hook_run_id":"hook-1"}}}}
+{"schema_version":2,"seq":4,"wall_time_unix_ms":1030,"payload":{"type":"harness_event_observed","event":{"category":"decision","name":"guardian_review","phase":"requested","details":{"prompt":"not printed"}}}}
