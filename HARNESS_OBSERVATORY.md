@@ -101,3 +101,14 @@ python3 tools/trace_viewer.py tools/tests/fixtures/teaching_trace.jsonl --summar
 ```
 
 > **Sensitive raw evidence:** Raw bundles and payload files can contain prompts, responses, tool arguments/results, paths, and other sensitive data. Use synthetic tasks for teaching, do not publish captures casually, and dispose of captures deliberately. The viewer does not open payload files and deliberately avoids printing stored prompt/message/file contents, but the bundle itself remains sensitive.
+
+## Focused verification
+
+The merged teaching fork was checked without making a live model request:
+
+- `cargo build -j 1 -p codex-cli` completed, and the development binary reports `codex-cli 0.149.0`;
+- the raw-to-reduced `harness_event_replays_with_turn_and_step_context` test passed;
+- the Core `pending_input_kind_prioritizes_user_steering_over_mailbox_delivery` test passed; and
+- `python3 -m unittest tools/tests/test_trace_viewer.py` passed all four viewer tests, including ordering, filtering, matched durations, redaction, and malformed-input handling.
+
+The documented capture command and hidden `debug trace-reduce` command were checked for CLI availability, but the final verification intentionally did not create a live cloud-backed trace. The checked-in fixture is the deterministic teaching path until an instructor deliberately records a synthetic live task.
