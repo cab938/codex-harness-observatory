@@ -164,6 +164,10 @@ impl AgentRegistry {
             .and_then(|metadata| metadata.agent_id)
     }
 
+    pub(crate) fn root_thread_id(&self) -> Option<ThreadId> {
+        self.agent_id_for_path(&AgentPath::root())
+    }
+
     pub(crate) fn agent_metadata_for_thread(&self, thread_id: ThreadId) -> Option<AgentMetadata> {
         let active_agents = self
             .active_agents

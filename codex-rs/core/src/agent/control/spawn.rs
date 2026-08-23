@@ -185,6 +185,7 @@ impl AgentControl {
                     .map_err(|err| {
                         CodexErr::InvalidRequest(format!("invalid stored agent path: {err}"))
                     })?;
+                let stored_parent_thread_id = stored_thread.parent_thread_id;
                 let mut reservation = self.state.reserve_spawn_slot(/*max_threads*/ None)?;
                 let mut metadata = self.prepare_agent_metadata(
                     &mut reservation,
@@ -199,6 +200,15 @@ impl AgentControl {
                 )?;
                 metadata.agent_id = Some(thread_id);
                 reservation.commit(metadata);
+                self.record_v2_thread_event(
+                    &state,
+                    Some(thread_id),
+                    stored_parent_thread_id,
+                    "agent_identity",
+                    "restored",
+                    None,
+                )
+                .await;
                 Ok::<(), CodexErr>(())
             }
             .await;
@@ -351,8 +361,23 @@ impl AgentControl {
                 })?;
             config.model_provider_id = stored_model_provider;
         }
+        self.record_v2_thread_event(
+            &state,
+            Some(thread_id),
+            stored_parent_thread_id,
+            "agent_reload",
+            "requested",
+            None,
+        )
+        .await;
         let residency_slot = self
-            .reserve_v2_residency_slot(&state, &config, Some(thread_id))
+            .reserve_v2_residency_slot(
+                &state,
+                &config,
+                Some(thread_id),
+                stored_parent_thread_id,
+                Some(thread_id),
+            )
             .await?;
 
         let parent_thread_id = initial_history
@@ -382,6 +407,15 @@ impl AgentControl {
                 self.state.clear_evicted_environments(thread_id);
                 residency_slot.commit(reloaded_thread.thread_id);
                 state.notify_thread_created(reloaded_thread.thread_id);
+                self.record_v2_thread_event(
+                    &state,
+                    Some(thread_id),
+                    parent_thread_id,
+                    "agent_reload",
+                    "completed",
+                    None,
+                )
+                .await;
                 Ok(())
             }
             Err(err) => {
@@ -389,8 +423,26 @@ impl AgentControl {
                     self.state.clear_evicted_environments(thread_id);
                     drop(residency_slot);
                     self.touch_loaded_v2_residency(&state, thread_id).await;
+                    self.record_v2_thread_event(
+                        &state,
+                        Some(thread_id),
+                        parent_thread_id,
+                        "agent_reload",
+                        "raced",
+                        Some("already_loaded"),
+                    )
+                    .await;
                     return Ok(());
                 }
+                self.record_v2_thread_event(
+                    &state,
+                    Some(thread_id),
+                    parent_thread_id,
+                    "agent_reload",
+                    "failed",
+                    Some("materialization_failed"),
+                )
+                .await;
                 Err(err)
             }
         }
@@ -423,8 +475,14 @@ impl AgentControl {
                 .is_some_and(is_v2_resident_session_source);
         let residency_slot = if spawn_uses_v2_residency {
             Some(
-                self.reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
-                    .await?,
+                self.reserve_v2_residency_slot(
+                    &state,
+                    &config,
+                    /*protected_thread_id*/ None,
+                    options.parent_thread_id,
+                    /*task_thread_id*/ None,
+                )
+                .await?,
             )
         } else {
             None
@@ -512,6 +570,26 @@ impl AgentControl {
         reservation.commit(agent_metadata.clone());
         if let Some(residency_slot) = residency_slot {
             residency_slot.commit(new_thread.thread_id);
+        }
+        if spawn_uses_v2_residency {
+            let parent_thread_id = notification_source
+                .as_ref()
+                .and_then(|source| match source {
+                    SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                        parent_thread_id,
+                        ..
+                    }) => Some(*parent_thread_id),
+                    _ => None,
+                });
+            self.record_v2_thread_event(
+                &state,
+                Some(new_thread.thread_id),
+                parent_thread_id,
+                "agent_identity",
+                "registered",
+                None,
+            )
+            .await;
         }
 
         if let Some(SessionSource::SubAgent(

@@ -9,6 +9,9 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
+use codex_rollout_trace::HARNESS_CATEGORY_MULTI_AGENT;
+use codex_rollout_trace::HarnessTraceEvent;
+use serde_json::json;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -51,13 +54,50 @@ impl AgentControl {
         state: &Arc<ThreadManagerState>,
         config: &Config,
         protected_thread_id: Option<ThreadId>,
+        parent_thread_id: Option<ThreadId>,
+        task_thread_id: Option<ThreadId>,
     ) -> CodexResult<V2ResidencySlot> {
         let capacity = config
             .effective_agent_max_threads(MultiAgentVersion::V2)
             .unwrap_or(usize::MAX);
-        Arc::clone(&self.v2_residency)
-            .reserve_slot(state, capacity, protected_thread_id)
+        self.record_v2_thread_event(
+            state,
+            task_thread_id,
+            parent_thread_id,
+            "agent_residency",
+            "requested",
+            None,
+        )
+        .await;
+        match Arc::clone(&self.v2_residency)
+            .reserve_slot(self, state, capacity, protected_thread_id)
             .await
+        {
+            Ok(slot) => {
+                self.record_v2_thread_event(
+                    state,
+                    task_thread_id,
+                    parent_thread_id,
+                    "agent_residency",
+                    "reserved",
+                    None,
+                )
+                .await;
+                Ok(slot)
+            }
+            Err(err) => {
+                self.record_v2_thread_event(
+                    state,
+                    task_thread_id,
+                    parent_thread_id,
+                    "agent_residency",
+                    "rejected",
+                    Some("capacity_unavailable"),
+                )
+                .await;
+                Err(err)
+            }
+        }
     }
 
     pub(super) async fn touch_loaded_v2_residency(
@@ -69,17 +109,116 @@ impl AgentControl {
             && is_resident_candidate(thread.as_ref())
         {
             self.v2_residency.touch(thread_id);
+            self.record_v2_thread_event(
+                state,
+                Some(thread_id),
+                thread.config_snapshot().await.parent_thread_id,
+                "agent_residency",
+                "touched",
+                None,
+            )
+            .await;
         }
     }
 
-    pub(super) fn forget_v2_residency(&self, thread_id: ThreadId) {
+    pub(super) async fn forget_v2_residency(
+        &self,
+        state: &ThreadManagerState,
+        thread_id: ThreadId,
+    ) {
+        let resident_parent_thread_id = match state.get_thread(thread_id).await {
+            Ok(thread) if is_resident_candidate(thread.as_ref()) => {
+                Some(thread.config_snapshot().await.parent_thread_id)
+            }
+            Ok(_) | Err(_) => None,
+        };
+        if let Some(parent_thread_id) = resident_parent_thread_id {
+            self.record_v2_thread_event(
+                state,
+                Some(thread_id),
+                parent_thread_id,
+                "agent_identity",
+                "forgotten",
+                Some("closed"),
+            )
+            .await;
+            self.record_v2_thread_event(
+                state,
+                Some(thread_id),
+                parent_thread_id,
+                "agent_residency",
+                "released",
+                Some("closed"),
+            )
+            .await;
+        }
         self.v2_residency.remove(thread_id);
+    }
+
+    pub(super) async fn record_v2_thread_event(
+        &self,
+        state: &ThreadManagerState,
+        task_thread_id: Option<ThreadId>,
+        parent_thread_id: Option<ThreadId>,
+        name: &str,
+        phase: &str,
+        reason: Option<&str>,
+    ) {
+        let event = self.v2_harness_event(name, phase, task_thread_id, parent_thread_id, reason);
+        for trace_thread_id in task_thread_id
+            .into_iter()
+            .chain(parent_thread_id)
+            .chain(self.state.root_thread_id())
+        {
+            if let Ok(thread) = state.get_thread(trace_thread_id).await {
+                thread
+                    .session
+                    .services
+                    .rollout_thread_trace
+                    .record_thread_harness_event(event);
+                return;
+            }
+        }
+    }
+
+    fn v2_harness_event(
+        &self,
+        name: &str,
+        phase: &str,
+        task_thread_id: Option<ThreadId>,
+        parent_thread_id: Option<ThreadId>,
+        reason: Option<&str>,
+    ) -> HarnessTraceEvent {
+        let task_metadata = task_thread_id.and_then(|thread_id| {
+            self.state
+                .agent_metadata_for_thread(thread_id)
+                .and_then(|metadata| metadata.agent_path.map(|agent_path| agent_path.to_string()))
+        });
+        let mut event = HarnessTraceEvent::new(HARNESS_CATEGORY_MULTI_AGENT, name, phase)
+            .with_details(json!({"implementation": "v2"}));
+        if let Some(root_thread_id) = self.state.root_thread_id() {
+            event = event.with_correlation("root_thread_id", root_thread_id.to_string());
+        }
+        if let Some(parent_thread_id) = parent_thread_id {
+            event = event.with_correlation("parent_thread_id", parent_thread_id.to_string());
+        }
+        if let Some(task_thread_id) = task_thread_id {
+            event = event.with_correlation("task_thread_id", task_thread_id.to_string());
+        }
+        if let Some(task_path) = task_metadata {
+            event = event.with_correlation("task_path", task_path);
+        }
+        if let Some(reason) = reason {
+            event = event.with_reason(reason);
+        }
+        event
     }
 }
 
 impl V2Residency {
     async fn reserve_slot(
         self: Arc<Self>,
+        control: &AgentControl,
         manager: &Arc<ThreadManagerState>,
         capacity: usize,
         protected_thread_id: Option<ThreadId>,
@@ -92,7 +231,7 @@ impl V2Residency {
                 });
             }
             if !self
-                .try_unload_one_resident(manager, protected_thread_id)
+                .try_unload_one_resident(control, manager, protected_thread_id)
                 .await
             {
                 return Err(CodexErr::new(CodexErrorDetails::AgentLimitReached {
@@ -116,6 +255,7 @@ impl V2Residency {
 
     async fn try_unload_one_resident(
         &self,
+        control: &AgentControl,
         manager: &Arc<ThreadManagerState>,
         protected_thread_id: Option<ThreadId>,
     ) -> bool {
@@ -130,18 +270,69 @@ impl V2Residency {
                 .ok()
                 .filter(|thread| is_resident_candidate(thread))
             else {
+                control
+                    .record_v2_thread_event(
+                        manager,
+                        Some(candidate_thread_id),
+                        None,
+                        "agent_eviction",
+                        "skipped",
+                        Some("not_resident"),
+                    )
+                    .await;
                 continue;
             };
+            let parent_thread_id = candidate_thread.config_snapshot().await.parent_thread_id;
+            control
+                .record_v2_thread_event(
+                    manager,
+                    Some(candidate_thread_id),
+                    parent_thread_id,
+                    "agent_residency",
+                    "selected_for_eviction",
+                    None,
+                )
+                .await;
             if !is_unloadable(candidate_thread.as_ref()).await {
                 self.touch(candidate_thread_id);
+                control
+                    .record_v2_thread_event(
+                        manager,
+                        Some(candidate_thread_id),
+                        parent_thread_id,
+                        "agent_eviction",
+                        "skipped",
+                        Some("not_idle"),
+                    )
+                    .await;
                 continue;
             }
+            control
+                .record_v2_thread_event(
+                    manager,
+                    Some(candidate_thread_id),
+                    parent_thread_id,
+                    "agent_eviction",
+                    "requested",
+                    Some("idle_terminal"),
+                )
+                .await;
             candidate_thread.ensure_rollout_materialized().await;
             if let Err(err) = candidate_thread.shutdown_and_wait().await {
                 warn!(
                     "failed to shut down v2 resident thread before unloading {candidate_thread_id}: {err}"
                 );
                 self.touch(candidate_thread_id);
+                control
+                    .record_v2_thread_event(
+                        manager,
+                        Some(candidate_thread_id),
+                        parent_thread_id,
+                        "agent_eviction",
+                        "failed",
+                        Some("shutdown_failed"),
+                    )
+                    .await;
                 continue;
             }
             let environments = candidate_thread.environment_selections().await;
@@ -151,7 +342,36 @@ impl V2Residency {
                 .agent_control
                 .state
                 .save_evicted_environments(candidate_thread_id, environments);
-            let _ = manager.remove_thread(&candidate_thread_id).await;
+            let eviction_phase = if manager.remove_thread(&candidate_thread_id).await.is_some() {
+                "completed"
+            } else {
+                "skipped"
+            };
+            let eviction_reason = if eviction_phase == "completed" {
+                "idle_terminal"
+            } else {
+                "already_nonresident"
+            };
+            control
+                .record_v2_thread_event(
+                    manager,
+                    Some(candidate_thread_id),
+                    parent_thread_id,
+                    "agent_eviction",
+                    eviction_phase,
+                    Some(eviction_reason),
+                )
+                .await;
+            control
+                .record_v2_thread_event(
+                    manager,
+                    Some(candidate_thread_id),
+                    parent_thread_id,
+                    "agent_residency",
+                    "released",
+                    Some("eviction"),
+                )
+                .await;
             return true;
         }
         false
