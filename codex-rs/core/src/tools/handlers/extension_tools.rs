@@ -61,6 +61,10 @@ impl ToolExecutor<ToolInvocation> for ExtensionToolAdapter {
 }
 
 impl CoreToolRuntime for ExtensionToolAdapter {
+    fn harness_tool_family(&self) -> &'static str {
+        "extension_plugin"
+    }
+
     fn is_builtin_control_tool(&self) -> bool {
         let tool_name = self.0.tool_name();
         tool_name.is_default_namespace()

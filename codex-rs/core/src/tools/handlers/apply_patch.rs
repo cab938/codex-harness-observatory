@@ -35,6 +35,7 @@ use crate::tools::registry::ToolExecutor;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::tools::tool_dispatch_trace::record_tool_context_event;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::ApplyPatchFileUpdateMode;
@@ -383,8 +384,30 @@ impl ApplyPatchHandler {
             ));
         };
         let args = match codex_apply_patch::parse_patch(&patch_input) {
-            Ok(args) => args,
+            Ok(args) => {
+                record_patch_event(
+                    step_context.as_ref(),
+                    session.as_ref(),
+                    &call_id,
+                    "patch_parse",
+                    "resolved",
+                    Some("parsed"),
+                    None,
+                    patch_hunk_counts(&args.hunks),
+                );
+                args
+            }
             Err(parse_error) => {
+                record_patch_event(
+                    step_context.as_ref(),
+                    session.as_ref(),
+                    &call_id,
+                    "patch_parse",
+                    "failed",
+                    Some("rejected"),
+                    Some("parse_error"),
+                    serde_json::json!({}),
+                );
                 return Err(FunctionCallError::RespondToModel(format!(
                     "apply_patch verification failed: {parse_error}"
                 )));
@@ -433,17 +456,47 @@ impl ApplyPatchHandler {
                 Ok(boxed_tool_output(ApplyPatchToolOutput::from_text(content)))
             }
             codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
+                record_patch_event(
+                    step_context.as_ref(),
+                    session.as_ref(),
+                    &call_id,
+                    "patch_parse",
+                    "failed",
+                    Some("rejected"),
+                    Some("verification_error"),
+                    serde_json::json!({}),
+                );
                 Err(FunctionCallError::RespondToModel(format!(
                     "apply_patch verification failed: {parse_error}"
                 )))
             }
             codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
                 tracing::trace!("Failed to parse apply_patch input, {error:?}");
+                record_patch_event(
+                    step_context.as_ref(),
+                    session.as_ref(),
+                    &call_id,
+                    "patch_parse",
+                    "failed",
+                    Some("rejected"),
+                    Some("shell_parse_error"),
+                    serde_json::json!({}),
+                );
                 Err(FunctionCallError::RespondToModel(
                     "apply_patch handler received invalid patch input".to_string(),
                 ))
             }
             codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => {
+                record_patch_event(
+                    step_context.as_ref(),
+                    session.as_ref(),
+                    &call_id,
+                    "patch_parse",
+                    "failed",
+                    Some("rejected"),
+                    Some("not_apply_patch"),
+                    serde_json::json!({}),
+                );
                 Err(FunctionCallError::RespondToModel(
                     "apply_patch handler received non-apply_patch input".to_string(),
                 ))
@@ -526,6 +579,16 @@ pub(crate) async fn intercept_apply_patch(
     .await
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
+            record_patch_event(
+                step_context.as_ref(),
+                session.as_ref(),
+                call_id,
+                "patch_parse",
+                "resolved",
+                Some("parsed"),
+                None,
+                patch_action_counts(&changes),
+            );
             let tool_ctx = ToolCtx {
                 session,
                 step_context,
@@ -537,15 +600,47 @@ pub(crate) async fn intercept_apply_patch(
             Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
         }
         codex_apply_patch::MaybeApplyPatchVerified::CorrectnessError(parse_error) => {
+            record_patch_event(
+                step_context.as_ref(),
+                session.as_ref(),
+                call_id,
+                "patch_parse",
+                "failed",
+                Some("rejected"),
+                Some("verification_error"),
+                serde_json::json!({}),
+            );
             Err(FunctionCallError::RespondToModel(format!(
                 "apply_patch verification failed: {parse_error}"
             )))
         }
         codex_apply_patch::MaybeApplyPatchVerified::ShellParseError(error) => {
             tracing::trace!("Failed to parse apply_patch input, {error:?}");
+            record_patch_event(
+                step_context.as_ref(),
+                session.as_ref(),
+                call_id,
+                "patch_parse",
+                "failed",
+                Some("rejected"),
+                Some("shell_parse_error"),
+                serde_json::json!({}),
+            );
             Ok(None)
         }
-        codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => Ok(None),
+        codex_apply_patch::MaybeApplyPatchVerified::NotApplyPatch => {
+            record_patch_event(
+                step_context.as_ref(),
+                session.as_ref(),
+                call_id,
+                "patch_parse",
+                "failed",
+                Some("rejected"),
+                Some("not_apply_patch"),
+                serde_json::json!({}),
+            );
+            Ok(None)
+        }
     }
 }
 
@@ -560,12 +655,42 @@ async fn execute_verified_patch(
         effective_patch_permissions(tool_ctx.session.as_ref(), &turn_environment, &action, cwd)
             .await
             .unwrap_or_else(|_| patch_permissions_without_path_matching(&action));
-    let apply = apply_patch::prepare_apply_patch(
+    let apply = match apply_patch::prepare_apply_patch(
         tool_ctx.step_context.turn.as_ref(),
         turn_environment.permission_profile(),
         &file_system_sandbox_policy,
         action,
-    )?;
+    ) {
+        Ok(apply) => apply,
+        Err(error) => {
+            record_patch_event(
+                tool_ctx.step_context.as_ref(),
+                tool_ctx.session.as_ref(),
+                &tool_ctx.call_id,
+                "patch_safety",
+                "decided",
+                Some("rejected"),
+                Some("safety_check"),
+                serde_json::json!({}),
+            );
+            return Err(error);
+        }
+    };
+    let safety_outcome = if apply.auto_approved {
+        "accepted"
+    } else {
+        "approval_required"
+    };
+    record_patch_event(
+        tool_ctx.step_context.as_ref(),
+        tool_ctx.session.as_ref(),
+        &tool_ctx.call_id,
+        "patch_safety",
+        "decided",
+        Some(safety_outcome),
+        None,
+        patch_action_counts(&apply.action),
+    );
     let changes = convert_apply_patch_to_protocol(&apply.action);
     let emitter = ToolEmitter::apply_patch_for_environment(
         changes.clone(),
@@ -605,6 +730,24 @@ async fn execute_verified_patch(
         Ok(output) => (Ok(output.exec_output), Some(output.delta)),
         Err(error) => (Err(error), Some(runtime.committed_delta().clone())),
     };
+    record_patch_event(
+        tool_ctx.step_context.as_ref(),
+        tool_ctx.session.as_ref(),
+        &tool_ctx.call_id,
+        "patch_commit",
+        if result.is_ok() {
+            "completed"
+        } else {
+            "failed"
+        },
+        Some(if result.is_ok() {
+            "committed"
+        } else {
+            "failed"
+        }),
+        (!result.is_ok()).then_some("runtime_error"),
+        patch_commit_details(&request.action, delta.as_ref()),
+    );
     let event_ctx = ToolEventCtx::new(
         tool_ctx.session.as_ref(),
         tool_ctx.step_context.turn.as_ref(),
@@ -612,6 +755,88 @@ async fn execute_verified_patch(
         tracker,
     );
     emitter.finish(event_ctx, result, delta.as_ref()).await
+}
+
+fn record_patch_event(
+    step_context: &StepContext,
+    session: &Session,
+    call_id: &str,
+    name: &str,
+    phase: &str,
+    outcome: Option<&str>,
+    reason: Option<&str>,
+    details: serde_json::Value,
+) {
+    record_tool_context_event(
+        session,
+        step_context,
+        call_id,
+        name,
+        phase,
+        outcome,
+        reason,
+        details,
+    );
+}
+
+fn patch_hunk_counts(hunks: &[Hunk]) -> serde_json::Value {
+    let mut add = 0;
+    let mut delete = 0;
+    let mut update = 0;
+    for hunk in hunks {
+        match hunk {
+            Hunk::AddFile { .. } => add += 1,
+            Hunk::DeleteFile { .. } => delete += 1,
+            Hunk::UpdateFile { .. } => update += 1,
+        }
+    }
+    serde_json::json!({ "file_count": hunks.len(), "actions": { "add": add, "delete": delete, "update": update } })
+}
+
+fn patch_action_counts(action: &ApplyPatchAction) -> serde_json::Value {
+    let mut add = 0;
+    let mut delete = 0;
+    let mut update = 0;
+    for change in action.changes().values() {
+        match change {
+            ApplyPatchFileChange::Add { .. } => add += 1,
+            ApplyPatchFileChange::Delete { .. } => delete += 1,
+            ApplyPatchFileChange::Update { .. } => update += 1,
+        }
+    }
+    serde_json::json!({ "file_count": action.changes().len(), "actions": { "add": add, "delete": delete, "update": update } })
+}
+
+fn patch_commit_details(
+    action: &ApplyPatchAction,
+    delta: Option<&codex_apply_patch::AppliedPatchDelta>,
+) -> serde_json::Value {
+    let committed = delta
+        .map(|delta| {
+            delta
+                .changes()
+                .iter()
+                .map(|change| &change.path)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let files = action
+        .changes()
+        .iter()
+        .map(|(path, change)| {
+            let action = match change {
+                ApplyPatchFileChange::Add { .. } => "add",
+                ApplyPatchFileChange::Delete { .. } => "delete",
+                ApplyPatchFileChange::Update { .. } => "update",
+            };
+            serde_json::json!({
+                "path": path.to_string(),
+                "action": action,
+                "status": if committed.contains(&path) { "committed" } else { "not_committed" },
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({ "file_count": action.changes().len(), "files": files })
 }
 
 fn require_environment_id(

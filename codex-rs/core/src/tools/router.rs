@@ -23,6 +23,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -68,6 +69,7 @@ pub(crate) fn tool_log_payload<'a>(
 pub struct ToolRouter {
     registry: ToolRegistry,
     model_visible_specs: Arc<[ToolSpec]>,
+    catalog_recorded: AtomicBool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +105,7 @@ impl ToolRouter {
         Self {
             registry,
             model_visible_specs: model_visible_specs.into(),
+            catalog_recorded: AtomicBool::new(false),
         }
     }
 
@@ -142,6 +145,50 @@ impl ToolRouter {
 
     pub(crate) fn tool_runtime(&self, call: &ToolCall) -> Option<Arc<dyn CoreToolRuntime>> {
         self.registry.tool(&call.tool_name)
+    }
+
+    pub(crate) fn record_catalog_if_needed(&self, invocation: &ToolInvocation) {
+        if self.catalog_recorded.swap(true, Ordering::AcqRel) {
+            return;
+        }
+
+        let mut counts = BTreeMap::new();
+        for spec in self.model_visible_specs.iter() {
+            match spec {
+                ToolSpec::Function(tool) => increment_tool_family(
+                    &mut counts,
+                    self.registry
+                        .harness_tool_family(&ToolName::plain(&tool.name)),
+                ),
+                ToolSpec::Freeform(tool) => increment_tool_family(
+                    &mut counts,
+                    self.registry
+                        .harness_tool_family(&ToolName::plain(&tool.name)),
+                ),
+                ToolSpec::Namespace(namespace) => {
+                    for tool in &namespace.tools {
+                        let name = match tool {
+                            codex_tools::ResponsesApiNamespaceTool::Function(tool) => &tool.name,
+                            codex_tools::ResponsesApiNamespaceTool::Custom(tool) => &tool.name,
+                        };
+                        increment_tool_family(
+                            &mut counts,
+                            self.registry.harness_tool_family(&ToolName::new(
+                                Some(namespace.name.clone()),
+                                name.clone(),
+                            )),
+                        );
+                    }
+                }
+                ToolSpec::ToolSearch { .. } => increment_tool_family(
+                    &mut counts,
+                    self.registry
+                        .harness_tool_family(&ToolName::plain("tool_search")),
+                ),
+                ToolSpec::WebSearch { .. } => increment_tool_family(&mut counts, "hosted"),
+            }
+        }
+        crate::tools::tool_dispatch_trace::record_tool_catalog(invocation, counts);
     }
 
     pub fn tool_waits_for_runtime_cancellation(&self, call: &ToolCall) -> bool {
@@ -288,6 +335,10 @@ impl ToolRouter {
             .dispatch_any_with_terminal_outcome(invocation, terminal_outcome_reached)
             .await
     }
+}
+
+fn increment_tool_family(counts: &mut BTreeMap<String, usize>, family: &str) {
+    *counts.entry(family.to_string()).or_default() += 1;
 }
 
 #[cfg(test)]

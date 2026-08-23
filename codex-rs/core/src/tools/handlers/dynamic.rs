@@ -162,7 +162,11 @@ impl DynamicToolHandler {
     }
 }
 
-impl CoreToolRuntime for DynamicToolHandler {}
+impl CoreToolRuntime for DynamicToolHandler {
+    fn harness_tool_family(&self) -> &'static str {
+        "dynamic_client"
+    }
+}
 
 #[expect(
     clippy::await_holding_invalid_type,

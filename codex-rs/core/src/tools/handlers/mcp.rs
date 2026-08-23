@@ -212,6 +212,10 @@ impl McpHandler {
 }
 
 impl CoreToolRuntime for McpHandler {
+    fn harness_tool_family(&self) -> &'static str {
+        "mcp"
+    }
+
     fn immutable_spec(&self) -> Option<&Arc<ToolSpec>> {
         Some(&self.spec)
     }

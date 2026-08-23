@@ -53,6 +53,10 @@ pub use codex_tools::ToolExposure;
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
+    /// Broad origin shown in teaching traces; the tool name supplies the rest.
+    fn harness_tool_family(&self) -> &'static str {
+        "built_in_local"
+    }
     /// Whether this built-in control tool needs a structured tool-call event.
     fn is_builtin_control_tool(&self) -> bool {
         false
@@ -481,6 +485,29 @@ impl ToolRegistry {
         Some(tool.waits_for_runtime_cancellation())
     }
 
+    pub(crate) fn harness_tool_family(&self, name: &ToolName) -> &'static str {
+        let name = name.clone().with_default_namespace();
+        if name.namespace.as_deref() == Some("collaboration")
+            || matches!(
+                name.name.as_str(),
+                "spawn_agent"
+                    | "send_message"
+                    | "followup_task"
+                    | "wait_agent"
+                    | "interrupt_agent"
+                    | "list_agents"
+                    | "close_agent"
+                    | "resume_agent"
+            )
+        {
+            return "collaboration";
+        }
+        self.tools
+            .get(&name)
+            .map(|tool| tool.runtime.harness_tool_family())
+            .unwrap_or("unknown")
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "tool dispatch must keep active-turn accounting atomic"
@@ -491,6 +518,14 @@ impl ToolRegistry {
         terminal_outcome_reached: Option<Arc<AtomicBool>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
+        crate::tools::tool_dispatch_trace::record_tool_event(
+            &invocation,
+            "tool_dispatch",
+            "dispatched",
+            Some("accepted"),
+            None,
+            serde_json::json!({ "source": tool_source_name(&invocation) }),
+        );
         let tool_name_flat = flat_tool_name(&tool_name);
         let call_id_owned = invocation.call_id.clone();
         let otel = invocation.turn.session_telemetry.clone();
@@ -526,6 +561,22 @@ impl ToolRegistry {
         let tool = match self.tool(&tool_name) {
             Some(tool) => tool,
             None => {
+                crate::tools::tool_dispatch_trace::record_tool_event(
+                    &invocation,
+                    "tool_handler_resolution",
+                    "resolved",
+                    Some("rejected"),
+                    Some("unregistered_tool"),
+                    serde_json::json!({ "family": "unknown" }),
+                );
+                crate::tools::tool_dispatch_trace::record_tool_event(
+                    &invocation,
+                    "tool_dispatch",
+                    "failed",
+                    Some("rejected"),
+                    Some("unregistered_tool"),
+                    serde_json::json!({}),
+                );
                 let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
                 let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
                 otel.tool_result_with_tags(
@@ -543,6 +594,14 @@ impl ToolRegistry {
                 return Err(err);
             }
         };
+        crate::tools::tool_dispatch_trace::record_tool_event(
+            &invocation,
+            "tool_handler_resolution",
+            "resolved",
+            Some("resolved"),
+            None,
+            serde_json::json!({ "family": self.harness_tool_family(&tool_name) }),
+        );
         let telemetry_tags = tool.telemetry_tags(&invocation);
         let mut tool_result_tags =
             Vec::with_capacity(base_tool_result_tags.len() + telemetry_tags.len() + 1);
@@ -556,6 +615,14 @@ impl ToolRegistry {
             }
         }
         if !tool.matches_kind(&invocation.payload) {
+            crate::tools::tool_dispatch_trace::record_tool_event(
+                &invocation,
+                "tool_dispatch",
+                "failed",
+                Some("rejected"),
+                Some("incompatible_payload"),
+                serde_json::json!({}),
+            );
             let message = format!("tool {tool_name} invoked with incompatible payload");
             let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
             otel.tool_result_with_tags(
@@ -584,6 +651,14 @@ impl ToolRegistry {
             .await
             {
                 PreToolUseHookResult::Blocked(message) => {
+                    crate::tools::tool_dispatch_trace::record_tool_event(
+                        &invocation,
+                        "tool_dispatch",
+                        "failed",
+                        Some("rejected"),
+                        Some("pre_tool_hook"),
+                        serde_json::json!({}),
+                    );
                     if tool.is_builtin_control_tool() {
                         let mut analytics = ControlToolCallGuard::new(&invocation);
                         analytics.finish(ControlToolCallStatus::Rejected);
@@ -605,6 +680,14 @@ impl ToolRegistry {
                         invocation = updated_invocation;
                     }
                     Err(err) => {
+                        crate::tools::tool_dispatch_trace::record_tool_event(
+                            &invocation,
+                            "tool_dispatch",
+                            "failed",
+                            Some("rejected"),
+                            Some("hook_input_rewrite"),
+                            serde_json::json!({}),
+                        );
                         if tool.is_builtin_control_tool() {
                             let mut analytics = ControlToolCallGuard::new(&invocation);
                             analytics.finish(ControlToolCallStatus::Failed);
@@ -628,6 +711,14 @@ impl ToolRegistry {
         }
 
         notify_tool_start(&invocation).await;
+        crate::tools::tool_dispatch_trace::record_tool_event(
+            &invocation,
+            "tool_dispatch",
+            "started",
+            Some("started"),
+            None,
+            serde_json::json!({}),
+        );
         let mut control_tool_analytics = tool
             .is_builtin_control_tool()
             .then(|| ControlToolCallGuard::new(&invocation));
@@ -759,6 +850,14 @@ impl ToolRegistry {
                         });
                         let err = FunctionCallError::RespondToModel(message);
                         dispatch_trace.record_failed(&err);
+                        crate::tools::tool_dispatch_trace::record_tool_event(
+                            &invocation,
+                            "tool_dispatch",
+                            "failed",
+                            Some("rejected"),
+                            Some("post_tool_hook"),
+                            serde_json::json!({}),
+                        );
                         return Err(err);
                     }
                     if let Some(feedback_message) = outcome.feedback_message {
@@ -778,13 +877,41 @@ impl ToolRegistry {
                     &result.payload,
                     result.result.as_ref(),
                 );
+                crate::tools::tool_dispatch_trace::record_tool_event(
+                    &invocation,
+                    "tool_dispatch",
+                    "completed",
+                    Some(if result.result.success_for_logging() {
+                        "completed"
+                    } else {
+                        "failed"
+                    }),
+                    None,
+                    serde_json::json!({}),
+                );
                 Ok(result)
             }
             Err(err) => {
                 dispatch_trace.record_failed(&err);
+                crate::tools::tool_dispatch_trace::record_tool_event(
+                    &invocation,
+                    "tool_dispatch",
+                    "failed",
+                    Some("failed"),
+                    Some("handler_error"),
+                    serde_json::json!({}),
+                );
                 Err(err)
             }
         }
+    }
+}
+
+fn tool_source_name(invocation: &ToolInvocation) -> &'static str {
+    match &invocation.source {
+        crate::tools::context::ToolCallSource::Direct => "direct",
+        crate::tools::context::ToolCallSource::DirectPlaintextMessage => "direct_plaintext_message",
+        crate::tools::context::ToolCallSource::CodeMode { .. } => "code_mode",
     }
 }
 
