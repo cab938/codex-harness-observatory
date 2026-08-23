@@ -112,6 +112,7 @@ use codex_rollout_trace::HARNESS_PHASE_COMPLETED;
 use codex_rollout_trace::HARNESS_PHASE_DECIDED;
 use codex_rollout_trace::HARNESS_PHASE_FAILED;
 use codex_rollout_trace::HARNESS_PHASE_REQUESTED;
+use codex_rollout_trace::HARNESS_PHASE_RETRYING;
 use codex_rollout_trace::HARNESS_PHASE_STARTED;
 use codex_rollout_trace::HarnessTraceEvent;
 use codex_skills::ToolMentionKind;
@@ -1775,6 +1776,21 @@ async fn run_sampling_request(
             ResponsesStreamRequest::Sampling,
         )
         .await?;
+        record_step_harness_event(
+            sess.as_ref(),
+            step_context.as_ref(),
+            HarnessTraceEvent::new(
+                HARNESS_CATEGORY_AGENT_LOOP,
+                "sampling_request",
+                HARNESS_PHASE_RETRYING,
+            )
+            .with_outcome("scheduled")
+            .with_reason("retryable_error")
+            .with_details(json!({
+                "completed_attempt": sampling_attempt,
+                "next_attempt": sampling_attempt + 1,
+            })),
+        );
         turn_context.turn_timing_state.record_sampling_retry();
     }
 }

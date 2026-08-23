@@ -658,7 +658,7 @@ fn record_turn_input_disposition(
             .record_harness_event(turn_id, event.with_outcome("steer")),
         Ok(TurnInputSubmission::NotSubmitted { reason }) => {
             let outcome = match reason {
-                NotSubmittedReason::NotIdle => "queue",
+                NotSubmittedReason::NotIdle => "not_submitted",
                 NotSubmittedReason::PendingTriggerTurn => "defer",
                 NotSubmittedReason::PlanMode
                 | NotSubmittedReason::NoActiveTurn
