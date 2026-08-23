@@ -13,7 +13,18 @@ from typing import Any, Iterator, Sequence
 
 
 OPENING_PHASES = {"requested", "started", "dispatched", "enqueued"}
-TERMINAL_PHASES = {"completed", "resolved", "failed", "cancelled", "dequeued"}
+TERMINAL_PHASES = {
+    "completed", "resolved", "failed", "cancelled", "dequeued", "delivered", "rejected",
+}
+PAIR_CORRELATION_KEYS = (
+    "message_id",
+    "guardian_review_id",
+    "approval_id",
+    "tool_call_id",
+    "target_thread_id",
+    "child_thread_id",
+    "parent_thread_id",
+)
 SENSITIVE_DETAIL_KEYS = {
     "argument", "arguments", "command", "content", "file", "files", "message",
     "messages", "output", "path", "paths", "payload", "payloads", "prompt",
@@ -186,14 +197,19 @@ def timeline(event_stream: Iterator[dict[str, Any]], filters: Filters, details: 
 def duration_key(item: dict[str, Any]) -> tuple[str, str, str] | None:
     step = item.get("step_id")
     correlations = item.get("correlations") or {}
-    parts = []
-    if isinstance(step, str):
-        parts.append("step=" + step)
-    if correlations:
-        parts.append("corr=" + compact_value(correlations))
-    if not parts:
+    identity = next(
+        (
+            f"{key}={correlations[key]}"
+            for key in PAIR_CORRELATION_KEYS
+            if isinstance(correlations.get(key), str)
+        ),
+        None,
+    )
+    if identity is None and isinstance(step, str):
+        identity = "step=" + step
+    if identity is None:
         return None
-    return str(item.get("category", "?")), str(item.get("name", "?")), "|".join(parts)
+    return str(item.get("category", "?")), str(item.get("name", "?")), identity
 
 
 def summary(event_stream: Iterator[dict[str, Any]], filters: Filters) -> int:
@@ -240,7 +256,10 @@ def summary(event_stream: Iterator[dict[str, Any]], filters: Filters) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="exit status: 0 = matched events, 1 = no match, 2 = malformed or unreadable input",
+    )
     parser.add_argument("input", help="trace bundle directory or trace.jsonl")
     parser.add_argument("--payload-type", action="append", default=[], metavar="TYPE", help="raw payload type (repeatable)")
     parser.add_argument("--thread", action="append", default=[], help="thread ID (repeatable)")

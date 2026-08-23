@@ -190,7 +190,8 @@ async fn handle_spawn_agent(
                 &session,
                 turn,
                 step_context.trace_step_id.clone(),
-                multi_agent_event("agent_spawn", "started")
+                multi_agent_event("agent_spawn", "completed")
+                    .with_outcome("created")
                     .with_correlation("parent_thread_id", session.thread_id.to_string())
                     .with_correlation("child_thread_id", spawned_agent.thread_id.to_string())
                     .with_correlation("tool_call_id", call_id.clone())

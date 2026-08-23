@@ -38,6 +38,7 @@ class TraceViewerTest(unittest.TestCase):
         self.assertIn("decision.guardian_review: 2", output)
         self.assertIn("decision.guardian_review: 1 matched, total=20ms", output)
         self.assertIn("tool.patch_commit: 1 matched, total=10ms", output)
+        self.assertIn("multi_agent.agent_spawn: 1 matched, total=10ms", output)
 
     def test_malformed_line_reports_its_number(self):
         with tempfile.TemporaryDirectory() as directory:

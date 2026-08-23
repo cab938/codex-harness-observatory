@@ -12,6 +12,8 @@ Owns the raw and reduced event envelope, step ID allocation, category and phase 
 
 ## Tranche 1: Agent loop and supervision
 
+Status: complete and merged.
+
 Primary ownership:
 
 - `codex-rs/core/src/session/turn.rs`
@@ -30,6 +32,8 @@ Required teaching events:
 Capture counts, booleans, policy choices, and categorical reasons. Do not duplicate full prompts or response streams already stored as inference payloads.
 
 ## Tranche 2: Approval, Guardian, and sandbox decisions
+
+Status: complete and merged.
 
 Primary ownership:
 
@@ -55,6 +59,8 @@ Do not record environment values, auth material, full prompts, or command output
 
 ## Tranche 3: Tool routing and file patching
 
+Status: complete and merged.
+
 Primary ownership:
 
 - `codex-rs/core/src/tools/router.rs`
@@ -78,6 +84,8 @@ Required teaching events:
 The existing typed tool lifecycle remains canonical for invocation and result payloads. New events explain dispatch, routing, and patch decisions around that lifecycle.
 
 ## Tranche 4: Multi-agent coordination
+
+Status: complete and merged.
 
 Primary ownership:
 
