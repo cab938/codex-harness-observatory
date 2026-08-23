@@ -144,7 +144,7 @@ pub(crate) async fn handle_message_string_tool(
                     .with_correlation("parent_thread_id", session.thread_id.to_string())
                     .with_correlation("target_thread_id", receiver_thread_id.to_string())
                     .with_correlation("tool_call_id", call_id.clone())
-                    .with_correlation("message_id", message_id.clone())
+                    .with_correlation("message_id", message_id)
                     .with_details(json!({"trigger_turn": mode.trigger_turn()})),
             );
         }

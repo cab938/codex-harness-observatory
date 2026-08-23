@@ -88,6 +88,78 @@ class TraceViewerTest(unittest.TestCase):
         ]
         self.assertEqual(trace_viewer.integrity_findings(iter(trace)), [])
 
+    def test_turn_input_disposition_precedes_step_context(self):
+        trace = [
+            {
+                "seq": 1,
+                "payload": {
+                    "type": "harness_event_observed",
+                    "event": {
+                        "category": "agent_loop",
+                        "name": "turn_input_disposition",
+                        "phase": "decided",
+                        "outcome": "start",
+                    },
+                },
+            }
+        ]
+        self.assertEqual(trace_viewer.integrity_findings(iter(trace)), [])
+
+    def test_skipped_approval_requirement_precedes_approval_identity(self):
+        trace = [
+            {
+                "seq": 1,
+                "payload": {
+                    "type": "harness_event_observed",
+                    "event": {
+                        "category": "decision",
+                        "name": "approval_requirement",
+                        "phase": "decided",
+                        "step_id": "step-1",
+                        "outcome": "skip",
+                        "correlations": {"tool_call_id": "tool-1"},
+                    },
+                },
+            }
+        ]
+        self.assertEqual(trace_viewer.integrity_findings(iter(trace)), [])
+
+    def test_v2_reservation_can_be_correlated_by_requesting_parent(self):
+        trace = [
+            {
+                "seq": phase_index,
+                "payload": {
+                    "type": "harness_event_observed",
+                    "event": {
+                        "category": "multi_agent",
+                        "name": "agent_residency",
+                        "phase": phase,
+                        "correlations": {"parent_thread_id": "thread-root"},
+                        "details": {"implementation": "v2"},
+                    },
+                },
+            }
+            for phase_index, phase in enumerate(("requested", "reserved"), start=1)
+        ]
+        self.assertEqual(trace_viewer.integrity_findings(iter(trace)), [])
+
+    def test_mailbox_enqueue_without_tool_call_is_a_standalone_fact(self):
+        trace = [
+            {
+                "seq": 1,
+                "payload": {
+                    "type": "harness_event_observed",
+                    "event": {
+                        "category": "multi_agent",
+                        "name": "agent_message",
+                        "phase": "enqueued",
+                        "details": {"trigger_turn": True},
+                    },
+                },
+            }
+        ]
+        self.assertEqual(trace_viewer.integrity_findings(iter(trace)), [])
+
     def test_malformed_line_reports_its_number(self):
         with tempfile.TemporaryDirectory() as directory:
             trace = pathlib.Path(directory) / "trace.jsonl"

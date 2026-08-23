@@ -94,6 +94,7 @@ APPROVAL_REQUIRED_EVENTS = {
     "approval_reviewer",
     "approval_resolution",
 }
+APPROVAL_ID_REQUIRED_EVENTS = APPROVAL_REQUIRED_EVENTS - {"approval_requirement"}
 DECISION_STEP_REQUIRED_EVENTS = APPROVAL_REQUIRED_EVENTS | {
     "sandbox_selection",
     "sandbox_attempt",
@@ -244,7 +245,11 @@ def required_step(item: dict[str, Any]) -> bool:
     category = item.get("category")
     name = item.get("name")
     phase = item.get("phase")
-    if category in {"agent_loop", "tool"}:
+    # Turn admission is decided before Core has constructed a StepContext.
+    # The selected turn is still correlated by the outer trace envelope.
+    if category == "agent_loop":
+        return name != "turn_input_disposition"
+    if category == "tool":
         return True
     if category == "decision" and name in DECISION_STEP_REQUIRED_EVENTS:
         return True
@@ -261,7 +266,9 @@ def required_correlations(item: dict[str, Any]) -> tuple[str, ...]:
     phase = item.get("phase")
     if category == "tool" and name in TOOL_CALL_REQUIRED_EVENTS:
         return ("tool_call_id",)
-    if category == "decision" and name in APPROVAL_REQUIRED_EVENTS:
+    if category == "decision" and name == "approval_requirement":
+        return ("tool_call_id",)
+    if category == "decision" and name in APPROVAL_ID_REQUIRED_EVENTS:
         return ("tool_call_id", "approval_id")
     if category == "decision" and name == "guardian_review":
         return ("guardian_review_id",)
@@ -287,7 +294,11 @@ def required_correlations(item: dict[str, Any]) -> tuple[str, ...]:
             return ("parent_thread_id", "child_thread_id")
     if category == "multi_agent" and is_v2_event(item):
         if name == "agent_residency" and phase in {"requested", "reserved", "rejected"}:
-            return ("root_thread_id",)
+            # A reservation happens before the child identity exists. Depending
+            # on session setup, Core may know either the root or just the
+            # requesting parent at this boundary; integrity_findings checks
+            # that at least one is present.
+            return ()
         if name in {"agent_identity", "agent_eviction", "agent_reload"} or (
             name == "agent_residency" and phase in {"touched", "released", "selected_for_eviction"}
         ):
@@ -329,6 +340,18 @@ def integrity_findings(event_stream: Iterator[dict[str, Any]]) -> list[TraceInte
         for key in required_correlations(item):
             if key not in correlations:
                 findings.append(TraceIntegrityFinding(seq, f"event requires correlation {key}"))
+        if (
+            is_v2_event(item)
+            and item.get("name") == "agent_residency"
+            and item.get("phase") in {"requested", "reserved", "rejected"}
+            and not ({"root_thread_id", "parent_thread_id"} & correlations.keys())
+        ):
+            findings.append(
+                TraceIntegrityFinding(
+                    seq,
+                    "event requires correlation root_thread_id or parent_thread_id",
+                )
+            )
 
         category = item["category"]
         name = item["name"]
@@ -341,6 +364,11 @@ def integrity_findings(event_stream: Iterator[dict[str, Any]]) -> list[TraceInte
         if phase not in opening_phases | terminal_phases:
             continue
         if identity is None:
+            if (category, name, phase) == ("multi_agent", "agent_message", "enqueued"):
+                # InputQueue also emits a standalone mailbox fact for initial
+                # child input and completion notification. Model-requested
+                # message spans carry tool_call_id and are still paired.
+                continue
             findings.append(
                 TraceIntegrityFinding(
                     seq,

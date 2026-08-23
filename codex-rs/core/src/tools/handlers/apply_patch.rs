@@ -745,7 +745,7 @@ async fn execute_verified_patch(
         } else {
             "failed"
         }),
-        (!result.is_ok()).then_some("runtime_error"),
+        result.is_err().then_some("runtime_error"),
         patch_commit_details(&request.action, delta.as_ref()),
     );
     let event_ctx = ToolEventCtx::new(

@@ -640,7 +640,8 @@ pub(crate) async fn run_turn(
                                 stop_supervision_event(
                                     "continued",
                                     /*outcome*/ Some("continued"),
-                                    /*details*/ Some(json!({
+                                    /*details*/
+                                    Some(json!({
                                         "continuation_fragment_count": stop_outcome.continuation_fragments.len(),
                                     })),
                                 ),

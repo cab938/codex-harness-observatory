@@ -132,7 +132,7 @@ only after the instrumentation and integrity rules are integrated.
 
 ## Tranche 6: Context construction and prompt provenance
 
-Status: planned.
+Status: complete and merged.
 
 Primary ownership:
 
@@ -158,9 +158,11 @@ Focused verification:
 - one compact or context-update test showing provenance without persisted source contents
 - `cargo check -p codex-core` or an equivalent serial package build; do not run the workspace suite in the worktree
 
+Delivered coverage: `step_context_capture`, `context_contribution`, `prompt_assembly`, and `compaction_application`, with source categories and bounded counts but no source contents. Focused context/provenance tests passed.
+
 ## Tranche 7: Multi-agent V2 identity, persistence, and residency
 
-Status: planned.
+Status: complete and merged.
 
 Primary ownership:
 
@@ -188,9 +190,11 @@ Focused verification:
 - one reload test extended to prove the same task identity is restored after eviction
 - `cargo check -p codex-core` or an equivalent serial package build; do not run the workspace suite in the worktree
 
+Delivered coverage: V2 `agent_identity`, `agent_residency`, `agent_eviction`, and `agent_reload` events, including categorical failure and race outcomes. Focused eviction and reload tests passed, and an explicitly enabled private V2 capture recorded live reservation and registration events.
+
 ## Tranche 8: Hook supervision and continuation effects
 
-Status: planned.
+Status: complete and merged.
 
 Primary ownership:
 
@@ -216,9 +220,11 @@ Focused verification:
 - one stop-hook test distinguishing continuation from actual completion
 - focused package checks only; do not run the workspace suite in the worktree
 
+Delivered coverage: `hook_selection`, `hook_invocation`, `hook_effect`, and `stop_supervision`. Focused tests passed for categorical hook effects and the distinction between continuation and actual completion.
+
 ## Tranche 9: Trace integrity and teaching captures
 
-Status: planned; starts after Tranches 6 through 8 merge.
+Status: complete and merged.
 
 Extend `tools/trace_viewer.py` rather than creating a second validator. Add a
 `--check` mode that verifies sequence order, opening-to-terminal lifecycle
@@ -237,9 +243,11 @@ Focused verification:
 - viewer tests for a clean trace and representative orphan, correlation, and ordering failures
 - one private live capture successfully passes `--check`, or the exact external blocker is recorded
 
+Delivered coverage: metadata-only `--check`, an expanded clean teaching fixture, and an intentionally broken fixture. Fifteen viewer tests pass. Private live patch and explicitly enabled V2 coordination captures both pass integrity; the live runs also supplied regression cases for valid pre-step, pre-approval-identity, pre-child-identity, and standalone mailbox events.
+
 ## Tranche 10: Unified live log viewer
 
-Status: planned; starts after Tranche 9.
+Status: complete and merged.
 
 Keep `tools/trace_viewer.py` as the single launcher and preserve its existing
 timeline, summary, filtering, and check modes. Add a local browser mode that:
@@ -263,6 +271,8 @@ Focused verification:
 
 - Python tests for initial load, incremental append delivery, manifest metadata, redaction, and malformed-line reporting
 - one browser interaction pass proving filter changes, event selection, detail display, pause/resume, and receipt of an event appended after connection
+
+Delivered coverage: `tools/trace_viewer.py --serve` launches one standard-library loopback server and static browser client. It streams initial and appended events, exposes safe header metadata, supports the complete filter set plus pause/resume and follow-live, and opens a redacted event detail pane without reading payload contents. Python stream/server tests and an isolated browser interaction pass completed successfully.
 
 ## Verification budget
 
