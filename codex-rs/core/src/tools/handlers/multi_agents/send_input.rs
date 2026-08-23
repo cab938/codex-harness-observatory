@@ -2,6 +2,7 @@ use super::*;
 use crate::agent::control::render_input_preview;
 use crate::tools::handlers::multi_agents_spec::create_send_input_tool_v1;
 use codex_tools::ToolSpec;
+use serde_json::json;
 
 pub(crate) struct Handler;
 
@@ -36,6 +37,7 @@ impl Handler {
             turn,
             payload,
             call_id,
+            step_context,
             ..
         } = invocation;
         let arguments = function_arguments(payload)?;
@@ -58,13 +60,49 @@ impl Handler {
         }
         let receiver_agent = receiver_agent.unwrap_or_default();
         if args.interrupt {
+            record_multi_agent_event(
+                &session,
+                &turn,
+                step_context.trace_step_id.clone(),
+                multi_agent_event("agent_interrupt", "requested")
+                    .with_correlation("parent_thread_id", session.thread_id.to_string())
+                    .with_correlation("target_thread_id", receiver_thread_id.to_string())
+                    .with_correlation("tool_call_id", call_id.clone()),
+            );
             session
                 .services
                 .agent_control
                 .interrupt_agent(receiver_thread_id)
                 .await
                 .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+            let resulting_status = session
+                .services
+                .agent_control
+                .get_status(receiver_thread_id)
+                .await;
+            record_multi_agent_event(
+                &session,
+                &turn,
+                step_context.trace_step_id.clone(),
+                multi_agent_event("agent_interrupt", "resolved")
+                    .with_correlation("parent_thread_id", session.thread_id.to_string())
+                    .with_correlation("target_thread_id", receiver_thread_id.to_string())
+                    .with_correlation("tool_call_id", call_id.clone())
+                    .with_details(
+                        json!({"resulting_status": agent_status_name(&resulting_status)}),
+                    ),
+            );
         }
+        record_multi_agent_event(
+            &session,
+            &turn,
+            step_context.trace_step_id.clone(),
+            multi_agent_event("agent_message", "requested")
+                .with_correlation("parent_thread_id", session.thread_id.to_string())
+                .with_correlation("target_thread_id", receiver_thread_id.to_string())
+                .with_correlation("tool_call_id", call_id.clone())
+                .with_details(json!({"delivery_mode": if args.interrupt { "interrupt_now" } else { "direct_input" }})),
+        );
         session
             .emit_turn_item_started(
                 &turn,
@@ -90,8 +128,7 @@ impl Handler {
                 Some(turn.sub_id.clone()),
                 turn.turn_metadata_state.root_turn_id(),
             )
-            .await
-            .map_err(|err| collab_agent_error(receiver_thread_id, err));
+            .await;
         let status = session
             .services
             .agent_control
@@ -101,7 +138,7 @@ impl Handler {
             .emit_turn_item_completed(
                 &turn,
                 TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
-                    id: call_id,
+                    id: call_id.clone(),
                     tool: CollabAgentTool::SendInput,
                     status: collab_tool_call_status(&status, Some(receiver_thread_id)),
                     sender_thread_id: session.thread_id,
@@ -118,7 +155,34 @@ impl Handler {
                 }),
             )
             .await;
-        let submission_id = result?;
+        let submission_id = match result {
+            Ok(submission_id) => {
+                record_multi_agent_event(
+                    &session,
+                    &turn,
+                    step_context.trace_step_id.clone(),
+                    multi_agent_event("agent_message", "enqueued")
+                        .with_correlation("parent_thread_id", session.thread_id.to_string())
+                        .with_correlation("target_thread_id", receiver_thread_id.to_string())
+                        .with_correlation("tool_call_id", call_id.clone())
+                        .with_correlation("message_id", submission_id.clone()),
+                );
+                submission_id
+            }
+            Err(err) => {
+                record_multi_agent_event(
+                    &session,
+                    &turn,
+                    step_context.trace_step_id.clone(),
+                    multi_agent_event("agent_message", "rejected")
+                        .with_reason("submission_error")
+                        .with_correlation("parent_thread_id", session.thread_id.to_string())
+                        .with_correlation("target_thread_id", receiver_thread_id.to_string())
+                        .with_correlation("tool_call_id", call_id.clone()),
+                );
+                return Err(collab_agent_error(receiver_thread_id, err));
+            }
+        };
 
         Ok(boxed_tool_output(SendInputResult { submission_id }))
     }

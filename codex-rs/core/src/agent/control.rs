@@ -46,9 +46,12 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
+use codex_rollout_trace::HARNESS_CATEGORY_MULTI_AGENT;
+use codex_rollout_trace::HarnessTraceEvent;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
 use serde::Serialize;
+use serde_json::json;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -580,7 +583,7 @@ impl AgentControl {
                 );
                 let context =
                     AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
-                let _ = control
+                let result = control
                     .send_inter_agent_communication(
                         parent_thread_id,
                         communication,
@@ -589,12 +592,45 @@ impl AgentControl {
                         /*root_turn_id*/ None,
                     )
                     .await;
+                if let (Ok(message_id), Ok(parent_thread)) =
+                    (result, state.get_thread(parent_thread_id).await)
+                {
+                    parent_thread
+                        .session
+                        .services
+                        .rollout_thread_trace
+                        .record_thread_harness_event(
+                            HarnessTraceEvent::new(
+                                HARNESS_CATEGORY_MULTI_AGENT,
+                                "agent_result_delivery",
+                                "enqueued",
+                            )
+                            .with_correlation("parent_thread_id", parent_thread_id.to_string())
+                            .with_correlation("child_thread_id", child_thread_id.to_string())
+                            .with_correlation("message_id", message_id)
+                            .with_details(json!({"child_status": agent_status_name(&status)})),
+                        );
+                }
                 return;
             }
             let message = format_subagent_notification_message(child_reference.as_str(), &status);
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
+            parent_thread
+                .session
+                .services
+                .rollout_thread_trace
+                .record_thread_harness_event(
+                    HarnessTraceEvent::new(
+                        HARNESS_CATEGORY_MULTI_AGENT,
+                        "agent_result_delivery",
+                        "delivered",
+                    )
+                    .with_correlation("parent_thread_id", parent_thread_id.to_string())
+                    .with_correlation("child_thread_id", child_thread_id.to_string())
+                    .with_details(json!({"child_status": agent_status_name(&status)})),
+                );
             parent_thread
                 .inject_user_message_without_turn(message)
                 .await;
@@ -808,6 +844,18 @@ impl AgentControl {
         }
 
         Ok(descendants)
+    }
+}
+
+fn agent_status_name(status: &AgentStatus) -> &'static str {
+    match status {
+        AgentStatus::PendingInit => "pending_init",
+        AgentStatus::Running => "running",
+        AgentStatus::Interrupted => "interrupted",
+        AgentStatus::Completed(_) => "completed",
+        AgentStatus::Errored(_) => "errored",
+        AgentStatus::Shutdown => "shutdown",
+        AgentStatus::NotFound => "not_found",
     }
 }
 

@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
+use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent_communication::AgentCommunicationContext;
@@ -12,6 +13,7 @@ use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
 use codex_protocol::AgentPath;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolSpec;
+use serde_json::json;
 
 #[derive(Default)]
 pub(crate) struct Handler {
@@ -62,6 +64,38 @@ async fn handle_spawn_agent(
 
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
+    let max_depth = turn.config.agent_max_depth;
+    if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
+        record_multi_agent_event(
+            &session,
+            turn,
+            step_context.trace_step_id.clone(),
+            multi_agent_event("agent_spawn_admission", "rejected")
+                .with_reason("depth_limit")
+                .with_correlation("parent_thread_id", session.thread_id.to_string())
+                .with_correlation("tool_call_id", call_id.clone())
+                .with_details(json!({"child_depth": child_depth, "max_depth": max_depth})),
+        );
+        return Err(FunctionCallError::RespondToModel(
+            "Agent depth limit reached. Solve the task yourself.".to_string(),
+        ));
+    }
+    record_multi_agent_event(
+        &session,
+        turn,
+        step_context.trace_step_id.clone(),
+        multi_agent_event("agent_spawn_admission", "accepted")
+            .with_correlation("parent_thread_id", session.thread_id.to_string())
+            .with_correlation("tool_call_id", call_id.clone())
+            .with_details(json!({
+                "child_depth": child_depth,
+                "max_depth": max_depth,
+                "fork_mode": match fork_mode.as_ref() { Some(SpawnAgentForkMode::FullHistory) => "full_history", Some(SpawnAgentForkMode::LastNTurns(_)) => "last_n_turns", None => "none" },
+                "role_override": role_name.is_some(),
+                "model_override": args.model.is_some(),
+                "reasoning_override": args.reasoning_effort.is_some()
+            })),
+    );
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
     if let Some(service_tier) = args.service_tier.as_ref() {
@@ -92,6 +126,16 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+
+    record_multi_agent_event(
+        &session,
+        turn,
+        step_context.trace_step_id.clone(),
+        multi_agent_event("agent_spawn", "requested")
+            .with_correlation("parent_thread_id", session.thread_id.to_string())
+            .with_correlation("tool_call_id", call_id.clone())
+            .with_details(json!({"child_depth": child_depth})),
+    );
 
     let spawn_source = thread_spawn_source(
         session.thread_id,
@@ -160,8 +204,35 @@ async fn handle_spawn_agent(
                 },
             ),
     )
-    .await
-    .map_err(collab_spawn_error)?;
+    .await;
+    let spawned_agent = match spawned_agent {
+        Ok(spawned_agent) => {
+            record_multi_agent_event(
+                &session,
+                turn,
+                step_context.trace_step_id.clone(),
+                multi_agent_event("agent_spawn", "started")
+                    .with_correlation("parent_thread_id", session.thread_id.to_string())
+                    .with_correlation("child_thread_id", spawned_agent.thread_id.to_string())
+                    .with_correlation("tool_call_id", call_id.clone())
+                    .with_details(json!({"child_depth": child_depth})),
+            );
+            spawned_agent
+        }
+        Err(err) => {
+            record_multi_agent_event(
+                &session,
+                turn,
+                step_context.trace_step_id.clone(),
+                multi_agent_event("agent_spawn", "failed")
+                    .with_reason("spawn_error")
+                    .with_correlation("parent_thread_id", session.thread_id.to_string())
+                    .with_correlation("tool_call_id", call_id.clone())
+                    .with_details(json!({"child_depth": child_depth})),
+            );
+            return Err(collab_spawn_error(err));
+        }
+    };
     let new_thread_id = spawned_agent.thread_id;
     let agent_snapshot = session
         .services

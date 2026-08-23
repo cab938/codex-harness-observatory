@@ -3,6 +3,7 @@ use crate::session::InputQueueActivity;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
 use codex_tools::ToolSpec;
+use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -43,6 +44,7 @@ impl Handler {
             turn,
             payload,
             call_id,
+            step_context,
             ..
         } = invocation;
         let arguments = function_arguments(payload)?;
@@ -60,6 +62,20 @@ impl Handler {
             Some(ms) => ms.max(min_timeout_ms),
             None => default_timeout_ms,
         };
+
+        record_multi_agent_event(
+            &session,
+            &turn,
+            step_context.trace_step_id.clone(),
+            multi_agent_event("agent_wait", "requested")
+                .with_correlation("parent_thread_id", session.thread_id.to_string())
+                .with_correlation("tool_call_id", call_id.clone())
+                .with_details(json!({
+                    "target_count": 0,
+                    "requested_timeout_ms": requested_timeout_ms,
+                    "effective_timeout_ms": timeout_ms
+                })),
+        );
 
         let turn_state = session
             .input_queue
@@ -91,6 +107,21 @@ impl Handler {
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
         let outcome = wait_for_activity(&mut activity_rx, pending_activity, deadline).await;
         let result = WaitAgentResult::from_outcome(outcome, requested_timeout_ms, timeout_ms);
+        let wake_reason = match outcome {
+            WaitOutcome::MailboxActivity => "mailbox_activity",
+            WaitOutcome::Steered => "status_change",
+            WaitOutcome::TimedOut => "timeout",
+        };
+        record_multi_agent_event(
+            &session,
+            &turn,
+            step_context.trace_step_id.clone(),
+            multi_agent_event("agent_wait", "resolved")
+                .with_outcome(wake_reason)
+                .with_correlation("parent_thread_id", session.thread_id.to_string())
+                .with_correlation("tool_call_id", call_id.clone())
+                .with_details(json!({"target_count": 0, "timed_out": result.timed_out})),
+        );
 
         session
             .emit_turn_item_completed(

@@ -22,8 +22,39 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
+use codex_rollout_trace::HARNESS_CATEGORY_MULTI_AGENT;
+use codex_rollout_trace::HarnessTraceEvent;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+
+/// Records a coordination transition at the handler boundary without copying tool inputs.
+pub(crate) fn record_multi_agent_event(
+    session: &Session,
+    turn: &TurnContext,
+    trace_step_id: Option<codex_rollout_trace::HarnessStepId>,
+    event: HarnessTraceEvent,
+) {
+    session.services.rollout_thread_trace.record_harness_event(
+        turn.sub_id.clone(),
+        event.with_optional_step_id(trace_step_id),
+    );
+}
+
+pub(crate) fn multi_agent_event(name: &str, phase: &str) -> HarnessTraceEvent {
+    HarnessTraceEvent::new(HARNESS_CATEGORY_MULTI_AGENT, name, phase)
+}
+
+pub(crate) fn agent_status_name(status: &crate::agent::AgentStatus) -> &'static str {
+    match status {
+        crate::agent::AgentStatus::PendingInit => "pending_init",
+        crate::agent::AgentStatus::Running => "running",
+        crate::agent::AgentStatus::Interrupted => "interrupted",
+        crate::agent::AgentStatus::Completed(_) => "completed",
+        crate::agent::AgentStatus::Errored(_) => "errored",
+        crate::agent::AgentStatus::Shutdown => "shutdown",
+        crate::agent::AgentStatus::NotFound => "not_found",
+    }
+}
 
 /// Minimum wait timeout to prevent tight polling loops from burning CPU.
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;

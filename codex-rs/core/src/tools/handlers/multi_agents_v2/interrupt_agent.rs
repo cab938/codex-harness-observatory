@@ -2,6 +2,7 @@ use super::*;
 use crate::tools::handlers::multi_agents_spec::create_interrupt_agent_tool_v2;
 use codex_protocol::error::CodexErrorDetails;
 use codex_tools::ToolSpec;
+use serde_json::json;
 
 pub(crate) struct Handler;
 
@@ -31,11 +32,18 @@ async fn handle_interrupt_agent(
         turn,
         payload,
         call_id,
+        step_context,
         ..
     } = invocation;
     let arguments = function_arguments(payload)?;
     let args: InterruptAgentArgs = parse_arguments(&arguments)?;
-    let agent_id = resolve_agent_target(&session, &turn, &args.target).await?;
+    let agent_id = resolve_agent_target(
+        &session,
+        &turn,
+        step_context.trace_step_id.clone(),
+        &args.target,
+    )
+    .await?;
     let receiver_agent = session
         .services
         .agent_control
@@ -60,6 +68,16 @@ async fn handle_interrupt_agent(
         FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
     })?;
     let status = session.services.agent_control.get_status(agent_id).await;
+    record_multi_agent_event(
+        &session,
+        &turn,
+        step_context.trace_step_id.clone(),
+        multi_agent_event("agent_interrupt", "requested")
+            .with_correlation("parent_thread_id", session.thread_id.to_string())
+            .with_correlation("target_thread_id", agent_id.to_string())
+            .with_correlation("tool_call_id", call_id.clone())
+            .with_details(json!({"previous_status": agent_status_name(&status)})),
+    );
     let result = match session
         .services
         .agent_control
@@ -78,6 +96,20 @@ async fn handle_interrupt_agent(
         Err(err) => Err(collab_agent_error(agent_id, err)),
     };
     result?;
+    let resulting_status = session.services.agent_control.get_status(agent_id).await;
+    record_multi_agent_event(
+        &session,
+        &turn,
+        step_context.trace_step_id.clone(),
+        multi_agent_event("agent_interrupt", "resolved")
+            .with_correlation("parent_thread_id", session.thread_id.to_string())
+            .with_correlation("target_thread_id", agent_id.to_string())
+            .with_correlation("tool_call_id", call_id.clone())
+            .with_details(json!({
+                "previous_status": agent_status_name(&status),
+                "resulting_status": agent_status_name(&resulting_status)
+            })),
+    );
     emit_sub_agent_activity(
         &session,
         &turn,
