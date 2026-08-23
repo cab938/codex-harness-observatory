@@ -127,6 +127,26 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
     }
 }
 
+async fn mark_thread_completed(thread: &CodexThread) {
+    let turn = thread.session.new_default_turn().await;
+    thread
+        .session
+        .send_event(
+            turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn.sub_id.clone(),
+                started_at: None,
+                last_agent_message: None,
+                error: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+            }),
+        )
+        .await;
+    *thread.session.active_turn.lock().await = None;
+}
+
 #[test]
 fn register_session_root_skips_threads_with_explicit_parent() {
     let control = AgentControl::default();
@@ -692,6 +712,7 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
     let (home, mut config) = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
     let _ = config.features.enable(Feature::Sqlite);
+    config.multi_agent_v2.max_concurrent_threads_per_session = 2;
     config.model = Some("gpt-5.6-sol".to_string());
     let harness = AgentControlHarness::new_with_config(home, config).await;
     let (parent_thread_id, _parent_thread) = harness.start_paginated_thread().await;
@@ -729,10 +750,7 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
         )])
         .await
         .expect("child rollout should persist with v2 metadata");
-    child_thread
-        .shutdown_and_wait()
-        .await
-        .expect("child thread should shut down");
+    mark_thread_completed(child_thread.as_ref()).await;
     let stored_child = child_thread
         .read_thread(
             /*include_archived*/ true, /*include_history*/ false,
@@ -741,19 +759,38 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
         .expect("child metadata should be readable");
     assert_eq!(stored_child.history_mode, ThreadHistoryMode::Paginated);
 
-    assert!(
-        harness
-            .manager
-            .remove_thread(&spawned_agent.thread_id)
-            .await
-            .is_some()
-    );
+    let evictor_path = AgentPath::try_from("/root/evictor").expect("evictor path");
+    let evictor = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("evict idle worker"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(evictor_path),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                parent_thread_id: Some(parent_thread_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("spawning another V2 agent should evict the idle worker");
+    let evictor_thread = harness
+        .manager
+        .get_thread(evictor.thread_id)
+        .await
+        .expect("evictor should exist");
+    mark_thread_completed(evictor_thread.as_ref()).await;
     match harness.manager.get_thread(spawned_agent.thread_id).await {
         Err(err) => match err.details() {
             CodexErrorDetails::ThreadNotFound(id) => assert_eq!(*id, spawned_agent.thread_id),
-            _ => panic!("expected ThreadNotFound, got {err:?}"),
+            _ => panic!("expected residency eviction, got {err:?}"),
         },
-        Ok(_) => panic!("expected thread to be removed"),
+        Ok(_) => panic!("expected idle worker to be evicted"),
     }
 
     let mut sender_config = harness.config.clone();

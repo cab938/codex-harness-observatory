@@ -16,7 +16,10 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_rollout_trace::HARNESS_CATEGORY_MULTI_AGENT;
+use codex_rollout_trace::HarnessTraceEvent;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -38,10 +41,17 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         .await
         .expect("start root thread");
     let control = manager.agent_control();
+    control.register_session_root(root.thread_id, /*current_parent_thread_id*/ None);
     let state = control.upgrade().expect("thread manager should be live");
 
     let first_slot = control
-        .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
+        .reserve_v2_residency_slot(
+            &state,
+            &config,
+            /*protected_thread_id*/ None,
+            Some(root.thread_id),
+            /*task_thread_id*/ None,
+        )
         .await
         .expect("first resident slot");
     let first =
@@ -50,7 +60,13 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
     mark_thread_completed(first.thread.as_ref()).await;
 
     let second_slot = control
-        .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
+        .reserve_v2_residency_slot(
+            &state,
+            &config,
+            /*protected_thread_id*/ None,
+            Some(root.thread_id),
+            /*task_thread_id*/ None,
+        )
         .await
         .expect("second resident slot should evict the first idle agent");
     match manager.get_thread(first.thread_id).await {
@@ -60,6 +76,23 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         },
         Ok(_) => panic!("expected evicted thread to be missing"),
     }
+    let eviction_event = control.v2_harness_event(
+        "agent_eviction",
+        "completed",
+        Some(first.thread_id),
+        Some(root.thread_id),
+        Some("idle_terminal"),
+    );
+    assert_eq!(
+        eviction_event,
+        HarnessTraceEvent::new(HARNESS_CATEGORY_MULTI_AGENT, "agent_eviction", "completed")
+            .with_reason("idle_terminal")
+            .with_correlation("root_thread_id", root.thread_id.to_string())
+            .with_correlation("parent_thread_id", root.thread_id.to_string())
+            .with_correlation("task_thread_id", first.thread_id.to_string())
+            .with_details(json!({"implementation": "v2"})),
+        "idle eviction must retain a categorical reason and V2 task correlations"
+    );
     let second = spawn_v2_subagent(&control, &state, config, root.thread_id, "worker-2").await;
     second_slot.commit(second.thread_id);
 
@@ -89,7 +122,13 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
     let state = control.upgrade().expect("thread manager should be live");
 
     let first_slot = control
-        .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
+        .reserve_v2_residency_slot(
+            &state,
+            &config,
+            /*protected_thread_id*/ None,
+            Some(root.thread_id),
+            /*task_thread_id*/ None,
+        )
         .await
         .expect("first resident slot");
     let first =
@@ -98,7 +137,13 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
     mark_thread_interrupted(first.thread.as_ref()).await;
 
     let second_slot = control
-        .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
+        .reserve_v2_residency_slot(
+            &state,
+            &config,
+            /*protected_thread_id*/ None,
+            Some(root.thread_id),
+            /*task_thread_id*/ None,
+        )
         .await
         .expect("second resident slot should evict the first interrupted idle agent");
     match manager.get_thread(first.thread_id).await {
