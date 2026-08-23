@@ -29,6 +29,12 @@ use std::time::Duration;
 use crate::AgentThreadId;
 use crate::CodexTurnId;
 use crate::ExecutionStatus;
+use crate::HARNESS_CATEGORY_DECISION;
+use crate::HARNESS_PHASE_CANCELLED;
+use crate::HARNESS_PHASE_COMPLETED;
+use crate::HARNESS_PHASE_FAILED;
+use crate::HARNESS_PHASE_REQUESTED;
+use crate::HarnessTraceEvent;
 use crate::RawTraceEventPayload;
 
 pub(crate) struct CodexTurnTraceEvent {
@@ -75,7 +81,63 @@ pub(crate) fn codex_turn_trace_event(
                 },
             })
         }
+        EventMsg::GuardianAssessment(event) => {
+            let (phase, outcome) = match event.status {
+                codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
+                    (HARNESS_PHASE_REQUESTED, "requested")
+                }
+                codex_protocol::protocol::GuardianAssessmentStatus::Approved => {
+                    (HARNESS_PHASE_COMPLETED, "approved")
+                }
+                codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
+                    (HARNESS_PHASE_COMPLETED, "denied")
+                }
+                codex_protocol::protocol::GuardianAssessmentStatus::TimedOut => {
+                    (HARNESS_PHASE_FAILED, "timed_out")
+                }
+                codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
+                    (HARNESS_PHASE_CANCELLED, "cancelled")
+                }
+            };
+            let mut trace = HarnessTraceEvent::new(
+                HARNESS_CATEGORY_DECISION,
+                "guardian_review",
+                phase,
+            )
+            .with_outcome(outcome)
+            .with_correlation("guardian_review_id", event.id.clone())
+            .with_details(serde_json::json!({
+                "action_type": guardian_action_type(&event.action),
+                "decision_source": event.decision_source.map(|source| match source {
+                    codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent => "agent",
+                }),
+            }));
+            if let Some(target_item_id) = &event.target_item_id {
+                trace = trace.with_correlation("target_item_id", target_item_id.clone());
+            }
+            Some(CodexTurnTraceEvent {
+                context_turn_id: event.turn_id.clone(),
+                payload: RawTraceEventPayload::HarnessEventObserved { event: trace },
+            })
+        }
         _ => None,
+    }
+}
+
+fn guardian_action_type(
+    action: &codex_protocol::protocol::GuardianAssessmentAction,
+) -> &'static str {
+    match action {
+        codex_protocol::protocol::GuardianAssessmentAction::Command { .. } => "command",
+        codex_protocol::protocol::GuardianAssessmentAction::Execve { .. } => "execve",
+        codex_protocol::protocol::GuardianAssessmentAction::ApplyPatch { .. } => "apply_patch",
+        codex_protocol::protocol::GuardianAssessmentAction::NetworkAccess { .. } => {
+            "network_access"
+        }
+        codex_protocol::protocol::GuardianAssessmentAction::McpToolCall { .. } => "mcp_tool_call",
+        codex_protocol::protocol::GuardianAssessmentAction::RequestPermissions { .. } => {
+            "request_permissions"
+        }
     }
 }
 
