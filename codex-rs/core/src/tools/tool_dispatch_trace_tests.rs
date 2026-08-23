@@ -3,6 +3,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
@@ -15,6 +18,8 @@ use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
+use crate::session::turn::build_prompt;
+use crate::session::turn::record_prompt_assembly;
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::code_mode::CodeModeWaitHandler;
@@ -392,4 +397,83 @@ fn single_bundle_dir(root: &Path) -> anyhow::Result<PathBuf> {
     entries.sort();
     assert_eq!(entries.len(), 1);
     Ok(entries.remove(0))
+}
+
+#[tokio::test]
+async fn context_trace_records_step_and_prompt_provenance_without_source_contents()
+-> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let (mut session, mut turn_context) = make_session_and_context().await;
+    let source_contents = "source contents must not be traced";
+    turn_context.developer_instructions = Some(source_contents.to_string());
+    attach_test_trace(&mut session, &turn_context, temp.path())?;
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let step_context = session
+        .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
+        .await?;
+    session
+        .record_context_updates_and_set_reference_context_item(step_context.as_ref())
+        .await?;
+    let prompt = build_prompt(
+        vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: source_contents.to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }],
+        step_context.as_ref(),
+        BaseInstructions::default(),
+    );
+    record_prompt_assembly(session.as_ref(), step_context.as_ref(), &prompt, 1);
+
+    let trace = codex_rollout_trace::replay_bundle(single_bundle_dir(temp.path())?)?;
+    let capture_events = trace
+        .harness_events
+        .iter()
+        .filter(|event| event.trace.name == "step_context_capture")
+        .collect::<Vec<_>>();
+    assert_eq!(capture_events.len(), 2);
+    assert!(
+        capture_events
+            .iter()
+            .all(|event| event.trace.step_id.as_deref() == step_context.trace_step_id.as_deref())
+    );
+    assert_eq!(capture_events[0].trace.phase, "started");
+    assert_eq!(capture_events[1].trace.phase, "completed");
+
+    let prompt_event = trace
+        .harness_events
+        .iter()
+        .find(|event| event.trace.name == "prompt_assembly")
+        .expect("prompt assembly event");
+    assert_eq!(
+        prompt_event.trace.step_id.as_deref(),
+        step_context.trace_step_id.as_deref()
+    );
+    assert_eq!(
+        prompt_event.trace.details["role_counts"]["user"],
+        serde_json::json!(1)
+    );
+    assert_eq!(
+        prompt_event.trace.details["input_modality_counts"]["text"],
+        serde_json::json!(1)
+    );
+
+    let provenance_events = trace
+        .harness_events
+        .iter()
+        .filter(|event| event.trace.name == "context_contribution")
+        .collect::<Vec<_>>();
+    assert!(provenance_events.iter().any(|event| {
+        event.trace.correlations.get("source").map(String::as_str) == Some("developer_instructions")
+            && event.trace.outcome.as_deref() == Some("included")
+            && event.trace.step_id.as_deref() == step_context.trace_step_id.as_deref()
+    }));
+    assert!(!serde_json::to_string(&provenance_events)?.contains(source_contents));
+    Ok(())
 }

@@ -1481,75 +1481,126 @@ async fn run_auto_compact(
         })),
     );
     let _profile_guard = turn_context.turn_timing_state.begin_compaction();
-    if turn_context.config.features.enabled(Feature::TokenBudget) {
+    let before_window_id = sess.current_window_id().await;
+    let before_item_count = sess.clone_history().await.raw_items().len();
+    record_step_harness_event(
+        sess.as_ref(),
+        step_context.as_ref(),
+        HarnessTraceEvent::new(
+            HARNESS_CATEGORY_CONTEXT,
+            "compaction_application",
+            HARNESS_PHASE_STARTED,
+        )
+        .with_reason(compaction_reason_name(reason))
+        .with_details(json!({
+            "phase": compaction_phase_name(phase),
+            "implementation": implementation,
+            "before_window_id": before_window_id,
+            "before_item_count": before_item_count,
+        })),
+    );
+    let result = if turn_context.config.features.enabled(Feature::TokenBudget) {
         // Compaction is the reset request, so force a new context window
         // instead of consuming a pending `new_context` tool request.
         crate::compact_token_budget::run_inline_auto_compact_task(
             Arc::clone(sess),
-            step_context,
+            Arc::clone(&step_context),
             initial_context_injection,
         )
-        .await?;
-        return Ok(());
+        .await
+    } else {
+        match turn_context.provider.capabilities().remote_compaction {
+            RemoteCompactionSupport::V2
+                if turn_context
+                    .config
+                    .features
+                    .enabled(Feature::RemoteCompactionV2) =>
+            {
+                emit_compact_metric(
+                    &sess.services.session_telemetry,
+                    "remote_v2",
+                    /*manual*/ false,
+                );
+                run_inline_remote_auto_compact_task_v2(
+                    Arc::clone(sess),
+                    Arc::clone(&step_context),
+                    fallback_step_context,
+                    client_session,
+                    initial_context_injection,
+                    reason,
+                    phase,
+                )
+                .await
+            }
+            RemoteCompactionSupport::V1 | RemoteCompactionSupport::V2 => {
+                emit_compact_metric(
+                    &sess.services.session_telemetry,
+                    "remote",
+                    /*manual*/ false,
+                );
+                run_inline_remote_auto_compact_task(
+                    Arc::clone(sess),
+                    Arc::clone(&step_context),
+                    fallback_step_context,
+                    client_session.turn_state(),
+                    initial_context_injection,
+                    reason,
+                    phase,
+                )
+                .await
+            }
+            RemoteCompactionSupport::Unsupported => {
+                emit_compact_metric(
+                    &sess.services.session_telemetry,
+                    "local",
+                    /*manual*/ false,
+                );
+                run_inline_auto_compact_task(
+                    Arc::clone(sess),
+                    Arc::clone(turn_context),
+                    initial_context_injection,
+                    reason,
+                    phase,
+                )
+                .await
+            }
+        }
+    };
+    let after_window_id = sess.current_window_id().await;
+    let after_item_count = sess.clone_history().await.raw_items().len();
+    let event = match &result {
+        Ok(()) => HarnessTraceEvent::new(
+            HARNESS_CATEGORY_CONTEXT,
+            "compaction_application",
+            HARNESS_PHASE_COMPLETED,
+        )
+        .with_reason(compaction_reason_name(reason)),
+        Err(error) if matches!(error.details(), CodexErrorDetails::TurnAborted) => {
+            HarnessTraceEvent::new(
+                HARNESS_CATEGORY_CONTEXT,
+                "compaction_application",
+                HARNESS_PHASE_CANCELLED,
+            )
+            .with_reason("turn_aborted")
+        }
+        Err(_) => HarnessTraceEvent::new(
+            HARNESS_CATEGORY_CONTEXT,
+            "compaction_application",
+            HARNESS_PHASE_FAILED,
+        )
+        .with_reason("compaction_failed"),
     }
-
-    match turn_context.provider.capabilities().remote_compaction {
-        RemoteCompactionSupport::V2
-            if turn_context
-                .config
-                .features
-                .enabled(Feature::RemoteCompactionV2) =>
-        {
-            emit_compact_metric(
-                &sess.services.session_telemetry,
-                "remote_v2",
-                /*manual*/ false,
-            );
-            run_inline_remote_auto_compact_task_v2(
-                Arc::clone(sess),
-                step_context,
-                fallback_step_context,
-                client_session,
-                initial_context_injection,
-                reason,
-                phase,
-            )
-            .await?;
-        }
-        RemoteCompactionSupport::V1 | RemoteCompactionSupport::V2 => {
-            emit_compact_metric(
-                &sess.services.session_telemetry,
-                "remote",
-                /*manual*/ false,
-            );
-            run_inline_remote_auto_compact_task(
-                Arc::clone(sess),
-                step_context,
-                fallback_step_context,
-                client_session.turn_state(),
-                initial_context_injection,
-                reason,
-                phase,
-            )
-            .await?;
-        }
-        RemoteCompactionSupport::Unsupported => {
-            emit_compact_metric(
-                &sess.services.session_telemetry,
-                "local",
-                /*manual*/ false,
-            );
-            run_inline_auto_compact_task(
-                Arc::clone(sess),
-                Arc::clone(turn_context),
-                initial_context_injection,
-                reason,
-                phase,
-            )
-            .await?;
-        }
-    }
-    Ok(())
+    .with_details(json!({
+        "compaction_reason": compaction_reason_name(reason),
+        "phase": compaction_phase_name(phase),
+        "implementation": implementation,
+        "before_window_id": before_window_id,
+        "after_window_id": after_window_id,
+        "before_item_count": before_item_count,
+        "after_item_count": after_item_count,
+    }));
+    record_step_harness_event(sess.as_ref(), step_context.as_ref(), event);
+    result
 }
 
 pub(super) fn collect_explicit_app_ids_from_skill_items(
@@ -1622,6 +1673,112 @@ pub(crate) fn build_prompt(
     }
 }
 
+pub(crate) fn record_prompt_assembly(
+    sess: &Session,
+    step_context: &StepContext,
+    prompt: &Prompt,
+    sampling_attempt: u32,
+) {
+    let mut developer_role_count = 0;
+    let mut user_role_count = 0;
+    let mut assistant_role_count = 0;
+    let mut other_role_count = 0;
+    let mut message_item_count = 0;
+    let mut agent_message_item_count = 0;
+    let mut reasoning_item_count = 0;
+    let mut tool_call_item_count = 0;
+    let mut tool_output_item_count = 0;
+    let mut compaction_item_count = 0;
+    let mut additional_tools_item_count = 0;
+    let mut other_item_count = 0;
+    let mut text_input_count = 0;
+    let mut image_input_count = 0;
+    let mut audio_input_count = 0;
+
+    for item in &prompt.input {
+        match item {
+            ResponseItem::Message { role, content, .. } => {
+                message_item_count += 1;
+                match role.as_str() {
+                    "developer" => developer_role_count += 1,
+                    "user" => user_role_count += 1,
+                    "assistant" => assistant_role_count += 1,
+                    _ => other_role_count += 1,
+                }
+                for content_item in content {
+                    match content_item {
+                        ContentItem::InputText { .. } | ContentItem::OutputText { .. } => {
+                            text_input_count += 1;
+                        }
+                        ContentItem::InputImage { .. } => image_input_count += 1,
+                        ContentItem::InputAudio { .. } => audio_input_count += 1,
+                    }
+                }
+            }
+            ResponseItem::AgentMessage { .. } => agent_message_item_count += 1,
+            ResponseItem::Reasoning { .. } => reasoning_item_count += 1,
+            ResponseItem::LocalShellCall { .. }
+            | ResponseItem::FunctionCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. } => tool_call_item_count += 1,
+            ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::ToolSearchOutput { .. } => tool_output_item_count += 1,
+            ResponseItem::Compaction { .. }
+            | ResponseItem::CompactionTrigger { .. }
+            | ResponseItem::ContextCompaction { .. } => compaction_item_count += 1,
+            ResponseItem::AdditionalTools { role, .. } => {
+                additional_tools_item_count += 1;
+                match role.as_str() {
+                    "developer" => developer_role_count += 1,
+                    "user" => user_role_count += 1,
+                    "assistant" => assistant_role_count += 1,
+                    _ => other_role_count += 1,
+                }
+            }
+            ResponseItem::Other => other_item_count += 1,
+        }
+    }
+
+    record_step_harness_event(
+        sess,
+        step_context,
+        HarnessTraceEvent::new(
+            HARNESS_CATEGORY_CONTEXT,
+            "prompt_assembly",
+            HARNESS_PHASE_COMPLETED,
+        )
+        .with_details(json!({
+            "attempt": sampling_attempt,
+            "history_item_count": prompt.input.len(),
+            "tool_count": prompt.tools.len(),
+            "role_counts": {
+                "developer": developer_role_count,
+                "user": user_role_count,
+                "assistant": assistant_role_count,
+                "other": other_role_count,
+            },
+            "item_family_counts": {
+                "message": message_item_count,
+                "agent_message": agent_message_item_count,
+                "reasoning": reasoning_item_count,
+                "tool_call": tool_call_item_count,
+                "tool_output": tool_output_item_count,
+                "compaction": compaction_item_count,
+                "additional_tools": additional_tools_item_count,
+                "other": other_item_count,
+            },
+            "input_modality_counts": {
+                "text": text_input_count,
+                "image": image_input_count,
+                "audio": audio_input_count,
+            },
+        })),
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(deprecated)]
 #[instrument(level = "trace",
@@ -1682,6 +1839,12 @@ async fn run_sampling_request(
             base_instructions.clone(),
         );
         sampling_attempt += 1;
+        record_prompt_assembly(
+            sess.as_ref(),
+            step_context.as_ref(),
+            &prompt,
+            sampling_attempt,
+        );
         record_step_harness_event(
             sess.as_ref(),
             step_context.as_ref(),
