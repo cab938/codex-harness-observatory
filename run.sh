@@ -49,6 +49,7 @@ require_port() {
 : "${OBSERVATORY_APP_SERVER_PORT:?missing OBSERVATORY_APP_SERVER_PORT in .env}"
 : "${OBSERVATORY_VIEWER_HOST:?missing OBSERVATORY_VIEWER_HOST in .env}"
 : "${OBSERVATORY_VIEWER_PORT:?missing OBSERVATORY_VIEWER_PORT in .env}"
+: "${OBSERVATORY_SHOW_CONTENT:?missing OBSERVATORY_SHOW_CONTENT in .env}"
 : "${OBSERVATORY_WORKSPACE:?missing OBSERVATORY_WORKSPACE in .env}"
 : "${OBSERVATORY_RUNS_DIR:?missing OBSERVATORY_RUNS_DIR in .env}"
 : "${OBSERVATORY_STARTUP_TIMEOUT_SECONDS:?missing OBSERVATORY_STARTUP_TIMEOUT_SECONDS in .env}"
@@ -58,6 +59,10 @@ require_port "OBSERVATORY_APP_SERVER_PORT" "$OBSERVATORY_APP_SERVER_PORT"
 require_port "OBSERVATORY_VIEWER_PORT" "$OBSERVATORY_VIEWER_PORT"
 if [[ ! "$OBSERVATORY_STARTUP_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "run.sh: OBSERVATORY_STARTUP_TIMEOUT_SECONDS must be a positive integer" >&2
+  exit 1
+fi
+if [[ "$OBSERVATORY_SHOW_CONTENT" != "0" && "$OBSERVATORY_SHOW_CONTENT" != "1" ]]; then
+  echo "run.sh: OBSERVATORY_SHOW_CONTENT must be 0 or 1" >&2
   exit 1
 fi
 
@@ -197,9 +202,15 @@ echo "  Endpoint: $app_server_url"
 echo "  PID:      $app_server_pid"
 echo "  Log:      $app_server_log"
 
+viewer_content_args=()
+if [[ "$OBSERVATORY_SHOW_CONTENT" == "1" ]]; then
+  viewer_content_args+=(--show-content)
+fi
+
 "$python_bin" "$viewer_script" "$trace_root" \
   --serve \
   --wait-for-bundle \
+  "${viewer_content_args[@]}" \
   --host "$OBSERVATORY_VIEWER_HOST" \
   --port "$OBSERVATORY_VIEWER_PORT" \
   >"$viewer_log" 2>&1 &
@@ -211,6 +222,11 @@ echo "  Viewer:   $viewer_url"
 echo "  PID:      $viewer_pid"
 echo "  Traces:   $trace_root"
 echo "  Log:      $viewer_log"
+if [[ "$OBSERVATORY_SHOW_CONTENT" == "1" ]]; then
+  echo "  Content:  full teaching evidence (prompts, responses, and tool payloads)"
+else
+  echo "  Content:  redacted metadata only"
+fi
 echo
 
 while true; do

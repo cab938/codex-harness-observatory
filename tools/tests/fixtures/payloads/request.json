@@ -1,0 +1,15 @@
+{
+  "type": "response.create",
+  "model": "gpt-test",
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Update hello.txt so the greeting is clearer."
+        }
+      ]
+    }
+  ]
+}

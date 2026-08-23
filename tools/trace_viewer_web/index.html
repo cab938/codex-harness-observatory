@@ -70,7 +70,7 @@
           </select>
         </label>
         <label class="field">
-          <span>Harness event</span>
+          <span>Event / tool name</span>
           <select id="name-filter" data-testid="name-filter">
             <option value="">All event names</option>
           </select>
@@ -130,8 +130,53 @@
             <h2 id="detail-title">Event detail</h2>
           </div>
         </div>
-        <div id="detail-empty" class="detail-empty">Select an event to inspect its redacted envelope and correlations.</div>
-        <pre id="event-detail" data-testid="event-detail" tabindex="0" hidden></pre>
+        <div id="detail-empty" class="detail-empty">Select an event to inspect what Core did and open its raw evidence.</div>
+        <div id="detail-content" class="detail-content" hidden>
+          <section class="event-overview" aria-labelledby="detail-event-title">
+            <div class="event-badges">
+              <span id="detail-category" class="detail-badge"></span>
+              <span id="detail-phase" class="detail-badge phase-badge"></span>
+            </div>
+            <h3 id="detail-event-title" data-testid="detail-event-title"></h3>
+            <p id="detail-description" class="detail-description"></p>
+            <dl id="detail-facts" class="detail-facts"></dl>
+          </section>
+
+          <section id="evidence-section" class="evidence-section" aria-labelledby="evidence-title" hidden>
+            <div class="subpanel-heading">
+              <div>
+                <p class="eyebrow">RAW EVIDENCE</p>
+                <h3 id="evidence-title">Artifact files</h3>
+              </div>
+            </div>
+            <div id="artifact-links" class="artifact-links" data-testid="artifact-links"></div>
+          </section>
+
+          <section id="artifact-viewer" class="artifact-viewer" aria-labelledby="artifact-title" hidden>
+            <div class="artifact-heading">
+              <div>
+                <p class="eyebrow">OPEN ARTIFACT</p>
+                <h3 id="artifact-title" data-testid="artifact-title"></h3>
+              </div>
+              <span id="artifact-meta" class="artifact-meta"></span>
+            </div>
+            <div id="patch-explanation" class="patch-explanation" data-testid="patch-explanation" hidden>
+              <strong>Internal Codex patch tool</strong>
+              <span>This is handled by Codex's built-in patch machinery, not by a shell command or MCP server.</span>
+              <div id="patch-files" class="patch-files"></div>
+              <pre id="patch-content" class="patch-content" data-testid="patch-content" tabindex="0" hidden></pre>
+            </div>
+            <details class="artifact-envelope" open>
+              <summary>Raw artifact</summary>
+              <pre id="artifact-content" data-testid="artifact-content" tabindex="0"></pre>
+            </details>
+          </section>
+
+          <details class="event-envelope" open>
+            <summary>Full event envelope</summary>
+            <pre id="event-detail" data-testid="event-detail" tabindex="0"></pre>
+          </details>
+        </div>
       </aside>
     </main>
 

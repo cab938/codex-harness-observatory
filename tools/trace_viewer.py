@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print a compact, privacy-conscious view of a raw Codex rollout trace."""
+"""Inspect a raw Codex rollout trace as a timeline or local teaching viewer."""
 
 import argparse
 import json
@@ -482,6 +482,101 @@ def safe_correlations(value: Any) -> dict[str, Any]:
     }
 
 
+def tool_descriptor(payload: dict[str, Any], item: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return the small human-readable identity shared by one tool lifecycle."""
+    call_id = payload.get("tool_call_id")
+    if not isinstance(call_id, str) and item is not None:
+        correlations = item.get("correlations")
+        if isinstance(correlations, dict):
+            correlated_id = correlations.get("tool_call_id")
+            if isinstance(correlated_id, str):
+                call_id = correlated_id
+
+    payload_type = payload.get("type")
+    if isinstance(payload_type, str) and payload_type.startswith("code_cell_"):
+        runtime_cell_id = payload.get("runtime_cell_id")
+        if not isinstance(runtime_cell_id, str):
+            return None
+        return {
+            "call_id": runtime_cell_id,
+            "name": "code_mode",
+            "requester": "model",
+            "classification": "model_authored_code",
+            "classification_label": "Model-authored JavaScript execution",
+        }
+
+    if not isinstance(call_id, str):
+        return None
+
+    descriptor: dict[str, Any] = {"call_id": call_id}
+    if payload_type != "tool_call_started":
+        return descriptor
+
+    summary = payload.get("summary")
+    name: str | None = None
+    if isinstance(summary, dict):
+        for key in ("label", "tool_name"):
+            candidate = summary.get(key)
+            if isinstance(candidate, str) and candidate:
+                name = candidate
+                break
+
+    kind = payload.get("kind")
+    kind_type: str | None = None
+    if isinstance(kind, str):
+        kind_type = kind
+    elif isinstance(kind, dict):
+        candidate = kind.get("type")
+        if isinstance(candidate, str):
+            kind_type = candidate
+        if kind_type == "mcp":
+            server = kind.get("server")
+            tool = kind.get("tool")
+            if isinstance(server, str) and isinstance(tool, str):
+                name = f"{server}.{tool}"
+        elif name is None:
+            candidate = kind.get("name")
+            if isinstance(candidate, str):
+                name = candidate
+
+    requester = payload.get("requester")
+    requester_type = requester.get("type") if isinstance(requester, dict) else requester
+    if isinstance(name, str):
+        descriptor["name"] = name
+    if isinstance(kind_type, str):
+        descriptor["kind"] = kind_type
+    if isinstance(requester_type, str):
+        descriptor["requester"] = requester_type
+
+    normalized_name = (name or kind_type or "").lower()
+    if normalized_name == "apply_patch" or kind_type == "apply_patch":
+        descriptor.update(
+            classification="internal_codex_tool",
+            classification_label="Internal Codex patch tool (not shell or MCP)",
+        )
+    elif kind_type == "mcp":
+        descriptor.update(
+            classification="mcp_tool",
+            classification_label="MCP tool call",
+        )
+    elif requester_type == "code_cell":
+        descriptor.update(
+            classification="code_mode_nested_tool",
+            classification_label="Tool called from model-authored JavaScript",
+        )
+    elif normalized_name in {"exec_command", "write_stdin", "local_shell", "shell"}:
+        descriptor.update(
+            classification="built_in_local_tool",
+            classification_label="Built-in local execution tool",
+        )
+    else:
+        descriptor.update(
+            classification="codex_tool",
+            classification_label="Codex tool call",
+        )
+    return descriptor
+
+
 def compact_value(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -568,7 +663,7 @@ def payload_references(value: Any, field: str = "payload") -> list[dict[str, Any
     return unique
 
 
-def viewer_event(event: dict[str, Any]) -> dict[str, Any]:
+def viewer_event(event: dict[str, Any], *, show_content: bool = False) -> dict[str, Any]:
     payload = event["payload"]
     item = harness(event)
     payload_metadata: dict[str, Any] = {}
@@ -588,6 +683,11 @@ def viewer_event(event: dict[str, Any]) -> dict[str, Any]:
         "payload_metadata": payload_metadata,
         "payload_references": payload_references(payload),
     }
+    descriptor = tool_descriptor(payload, item)
+    if descriptor is not None:
+        safe_event["tool"] = descriptor
+    if show_content:
+        safe_event["payload"] = payload
     if item is not None:
         safe_event["harness"] = {
             "category": item.get("category"),
@@ -596,13 +696,17 @@ def viewer_event(event: dict[str, Any]) -> dict[str, Any]:
             "step_id": item.get("step_id"),
             "outcome": item.get("outcome"),
             "reason": item.get("reason"),
-            "correlations": safe_correlations(item.get("correlations")),
-            "details": safe_detail(item.get("details")),
+            "correlations": item.get("correlations")
+            if show_content
+            else safe_correlations(item.get("correlations")),
+            "details": item.get("details")
+            if show_content
+            else safe_detail(item.get("details")),
         }
     return safe_event
 
 
-def manifest_metadata(path: Path) -> dict[str, Any]:
+def manifest_metadata(path: Path, *, show_content: bool = False) -> dict[str, Any]:
     manifest_path = path.parent / "manifest.json"
     manifest: dict[str, Any] = {}
     if manifest_path.is_file():
@@ -643,7 +747,45 @@ def manifest_metadata(path: Path) -> dict[str, Any]:
             manifest[key] = safe_reference_path(manifest[key])
     manifest["source_name"] = path.parent.name if path.name == "trace.jsonl" else path.name
     manifest["stream_mode"] = "append_only_jsonl"
+    manifest["content_mode"] = "full" if show_content else "redacted"
     return manifest
+
+
+def artifact_payload(trace_path: Path, requested_path: str) -> dict[str, Any]:
+    """Load one bundle-local evidence artifact for the teaching viewer."""
+    relative = Path(requested_path)
+    if not requested_path or relative.is_absolute() or ".." in relative.parts:
+        raise TraceInputError("artifact path must be relative to the trace bundle")
+    bundle_root = trace_path.parent.resolve()
+    try:
+        artifact_path = (bundle_root / relative).resolve(strict=True)
+        artifact_path.relative_to(bundle_root)
+    except (OSError, ValueError) as error:
+        raise TraceInputError(f"artifact is unavailable: {relative.as_posix()}") from error
+    if not artifact_path.is_file():
+        raise TraceInputError(f"artifact is not a file: {relative.as_posix()}")
+    try:
+        raw = artifact_path.read_bytes()
+    except OSError as error:
+        raise TraceInputError(f"cannot read artifact: {relative.as_posix()}") from error
+    try:
+        text_content = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise TraceInputError(f"artifact is not UTF-8 text: {relative.as_posix()}") from error
+    media_type = "text/plain"
+    content: Any = text_content
+    if artifact_path.suffix.lower() == ".json":
+        try:
+            content = json.loads(text_content)
+            media_type = "application/json"
+        except json.JSONDecodeError:
+            pass
+    return {
+        "path": relative.as_posix(),
+        "media_type": media_type,
+        "size_bytes": len(raw),
+        "content": content,
+    }
 
 
 def safe_stream_error(error: Exception, path: Path) -> str:
@@ -657,6 +799,7 @@ def tail_updates(
     follow: bool = True,
     poll_interval: float = 0.15,
     stop_event: threading.Event | None = None,
+    show_content: bool = False,
 ) -> Iterator[dict[str, Any]]:
     position = 0
     buffered = b""
@@ -701,7 +844,10 @@ def tail_updates(
                         continue
                     previous_seq = event["seq"]
                     if event["seq"] > after_seq:
-                        yield {"kind": "event", "event": viewer_event(event)}
+                        yield {
+                            "kind": "event",
+                            "event": viewer_event(event, show_content=show_content),
+                        }
                     last_heartbeat = time.monotonic()
                 continue
         except OSError as error:
@@ -730,9 +876,11 @@ class TraceViewerHTTPServer(ThreadingHTTPServer):
         address: tuple[str, int],
         trace: Path | None,
         trace_root: Path | None = None,
+        show_content: bool = False,
     ):
         self.trace_path = trace
         self.trace_root = trace_root
+        self.show_content = show_content
         self.trace_lock = threading.Lock()
         self.stop_event = threading.Event()
         super().__init__(address, TraceViewerRequestHandler)
@@ -819,7 +967,13 @@ class TraceViewerRequestHandler(BaseHTTPRequestHandler):
             if trace_path is None:
                 return
             if waiting_for_bundle:
-                update = {"kind": "source", "metadata": manifest_metadata(trace_path)}
+                update = {
+                    "kind": "source",
+                    "metadata": manifest_metadata(
+                        trace_path,
+                        show_content=self.viewer_server.show_content,
+                    ),
+                }
                 data = json.dumps(update, separators=(",", ":"), ensure_ascii=True)
                 self.wfile.write(f"event: trace-source\ndata: {data}\n\n".encode("utf-8"))
                 self.wfile.flush()
@@ -827,6 +981,7 @@ class TraceViewerRequestHandler(BaseHTTPRequestHandler):
                 trace_path,
                 after_seq=after_seq,
                 stop_event=self.viewer_server.stop_event,
+                show_content=self.viewer_server.show_content,
             ):
                 kind = update["kind"]
                 if kind == "heartbeat":
@@ -863,10 +1018,18 @@ class TraceViewerRequestHandler(BaseHTTPRequestHandler):
                             "source_name": trace_root.name if trace_root else "pending",
                             "stream_mode": "waiting_for_trace_bundle",
                             "raw_event_log": "trace.jsonl",
+                            "content_mode": "full"
+                            if self.viewer_server.show_content
+                            else "redacted",
                         }
                     )
                 else:
-                    self.send_json(manifest_metadata(trace_path))
+                    self.send_json(
+                        manifest_metadata(
+                            trace_path,
+                            show_content=self.viewer_server.show_content,
+                        )
+                    )
             except TraceInputError as error:
                 source = self.viewer_server.trace_root or Path("trace.jsonl")
                 self.send_json(
@@ -875,6 +1038,23 @@ class TraceViewerRequestHandler(BaseHTTPRequestHandler):
                 )
         elif parsed.path == "/api/stream":
             self.stream_events(parse_qs(parsed.query))
+        elif parsed.path == "/api/artifact":
+            if not self.viewer_server.show_content:
+                self.send_json(
+                    {"error": "artifact content is disabled; restart with --show-content"},
+                    HTTPStatus.FORBIDDEN,
+                )
+                return
+            query = parse_qs(parsed.query)
+            requested_path = query.get("path", [""])[0]
+            trace_path = self.viewer_server.resolve_trace_path()
+            if trace_path is None:
+                self.send_json({"error": "trace bundle is not available yet"}, HTTPStatus.NOT_FOUND)
+                return
+            try:
+                self.send_json(artifact_payload(trace_path, requested_path))
+            except TraceInputError as error:
+                self.send_json({"error": str(error)}, HTTPStatus.NOT_FOUND)
         else:
             self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -885,19 +1065,34 @@ def make_viewer_server(
     port: int,
     *,
     wait_for_bundle: bool = False,
+    show_content: bool = False,
 ) -> TraceViewerHTTPServer:
     try:
         return TraceViewerHTTPServer(
             (host, port),
             None if wait_for_bundle else path,
             path if wait_for_bundle else None,
+            show_content,
         )
     except OSError as error:
         raise TraceInputError(f"cannot bind viewer at {host}:{port}: {error}") from error
 
 
-def serve_viewer(path: Path, host: str, port: int, *, wait_for_bundle: bool = False) -> int:
-    server = make_viewer_server(path, host, port, wait_for_bundle=wait_for_bundle)
+def serve_viewer(
+    path: Path,
+    host: str,
+    port: int,
+    *,
+    wait_for_bundle: bool = False,
+    show_content: bool = False,
+) -> int:
+    server = make_viewer_server(
+        path,
+        host,
+        port,
+        wait_for_bundle=wait_for_bundle,
+        show_content=show_content,
+    )
     bound_host, bound_port = server.server_address[:2]
     display_host = "127.0.0.1" if bound_host in {"0.0.0.0", "::"} else bound_host
     print(f"Codex Harness Observatory: http://{display_host}:{bound_port}", flush=True)
@@ -1016,6 +1211,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="serve the unified live viewer and tail appended events",
     )
     parser.add_argument(
+        "--show-content",
+        action="store_true",
+        help="send full event fields and allow bundle payloads to be opened in the local viewer",
+    )
+    parser.add_argument(
         "--wait-for-bundle",
         action="store_true",
         help="bind immediately and wait for the first trace bundle under INPUT (requires --serve)",
@@ -1054,10 +1254,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.host,
                 args.port,
                 wait_for_bundle=True,
+                show_content=args.show_content,
             )
         path = trace_path(args.input)
         if args.serve:
-            return serve_viewer(path, args.host, args.port)
+            return serve_viewer(
+                path,
+                args.host,
+                args.port,
+                show_content=args.show_content,
+            )
         if args.check:
             return check(events(path, enforce_sequence=False))
         matched = summary(events(path), filters) if args.summary else timeline(events(path), filters, args.details)

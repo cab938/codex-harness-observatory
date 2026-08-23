@@ -189,6 +189,35 @@ class TraceViewerTest(unittest.TestCase):
         self.assertNotIn("message", child_result["payload_metadata"])
         self.assertNotIn("sensitive child result", json.dumps(child_result))
 
+    def test_teaching_mode_exposes_full_event_content_and_names_internal_patch_tool(self):
+        fixture_events = list(trace_viewer.events(FIXTURE))
+        guardian = trace_viewer.viewer_event(fixture_events[9], show_content=True)
+        patch = trace_viewer.viewer_event(fixture_events[11], show_content=True)
+
+        self.assertEqual(guardian["harness"]["details"]["prompt"], "secret")
+        self.assertEqual(guardian["payload"]["event"]["details"]["prompt"], "secret")
+        self.assertEqual(patch["tool"]["name"], "apply_patch")
+        self.assertEqual(patch["tool"]["kind"], "apply_patch")
+        self.assertEqual(patch["tool"]["classification"], "internal_codex_tool")
+        self.assertIn("not shell or MCP", patch["tool"]["classification_label"])
+
+        code_cell = trace_viewer.viewer_event(
+            {
+                "schema_version": 2,
+                "seq": 99,
+                "wall_time_unix_ms": 1200,
+                "rollout_id": "demo-rollout",
+                "payload": {
+                    "type": "code_cell_ended",
+                    "runtime_cell_id": "cell-4",
+                    "status": "completed",
+                },
+            },
+            show_content=True,
+        )
+        self.assertEqual(code_cell["tool"]["name"], "code_mode")
+        self.assertEqual(code_cell["tool"]["call_id"], "cell-4")
+
     def test_tail_delivers_initial_and_appended_events_without_losing_order(self):
         with tempfile.TemporaryDirectory() as directory:
             trace = pathlib.Path(directory) / "trace.jsonl"
@@ -259,12 +288,40 @@ class TraceViewerTest(unittest.TestCase):
                 self.assertEqual(metadata["raw_schema_version"], 2)
                 self.assertEqual(metadata["raw_event_log"], "trace.jsonl")
                 self.assertEqual(metadata["payloads_dir"], "payloads")
+                self.assertEqual(metadata["content_mode"], "redacted")
                 self.assertNotIn("/private/location", json.dumps(metadata))
                 self.assertIn("Harness Observatory", page)
             finally:
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
+
+    def test_teaching_server_opens_bundle_payload_artifacts(self):
+        server = trace_viewer.make_viewer_server(
+            FIXTURE,
+            "127.0.0.1",
+            0,
+            show_content=True,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            host, port = server.server_address[:2]
+            with urllib.request.urlopen(f"http://{host}:{port}/api/header") as response:
+                metadata = json.load(response)
+            with urllib.request.urlopen(
+                f"http://{host}:{port}/api/artifact?path=payloads%2Ftool-input.json"
+            ) as response:
+                artifact = json.load(response)
+
+            self.assertEqual(metadata["content_mode"], "full")
+            self.assertEqual(artifact["path"], "payloads/tool-input.json")
+            self.assertEqual(artifact["content"]["tool_name"], "apply_patch")
+            self.assertIn("*** Update File: hello.txt", artifact["content"]["payload"]["input"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_waiting_server_binds_before_the_first_bundle_exists(self):
         with tempfile.TemporaryDirectory() as directory:

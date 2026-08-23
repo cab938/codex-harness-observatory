@@ -53,7 +53,7 @@ The teaching fork adds a single `harness_event_observed` raw event family. Every
 
 This preserves one raw format: fine-grained events can be filtered directly and then reduced or aggregated for lecture views.
 
-The phase-two additions make four further teaching boundaries visible without copying their contents:
+The phase-two additions make four further teaching boundaries visible:
 
 - context capture, contribution provenance, prompt assembly, and compaction application;
 - hook selection, invocation, categorical effects, and stop-hook continuation;
@@ -78,7 +78,7 @@ export CODEX_ROLLOUT_TRACE_ROOT="$capture_root"
 find "$capture_root" -mindepth 1 -maxdepth 1 -type d -print
 ```
 
-The listed directory is the trace bundle. Check its metadata-level invariants before teaching from it, reduce its raw evidence with the hidden `debug trace-reduce` command when a graph view is useful, or inspect the raw timeline without opening payload files:
+The listed directory is the trace bundle. Check its metadata-level invariants before teaching from it, reduce its raw evidence with the hidden `debug trace-reduce` command when a graph view is useful, or inspect the raw timeline:
 
 ```bash
 bundle="/path/printed/by/find"
@@ -113,9 +113,16 @@ Launch the same tool in browser mode:
 python3 tools/trace_viewer.py "$bundle" --serve
 ```
 
-The server binds to `127.0.0.1:8765` by default; use `--port 0` to select a free port. It sends existing rows and then tails appended JSONL records over one server-sent event stream in writer-assigned order. The fixed header shows safe manifest and stream metadata. The interface can filter on raw type, thread, turn, step, harness category/name/phase, and correlation key/value; pause and resume without dropping received rows; toggle follow-live; and open any event for a redacted detail view. Malformed appended lines become visible stream errors.
+The server binds to `127.0.0.1:8765` by default; use `--port 0` to select a free port. It sends existing rows and then tails appended JSONL records over one server-sent event stream in writer-assigned order. The fixed header shows manifest and stream metadata. The interface can filter on raw type, thread, turn, step, category, harness event or human-readable tool name, phase, and correlation key/value; pause and resume without dropping received rows; toggle follow-live; and open any event for detail. Malformed appended lines become visible stream errors.
 
-The browser receives only a safe envelope, compact harness facts, permitted correlations, and payload-reference metadata. It never opens the payload files. Absolute manifest paths, prompt/message/file content, commands, and other sensitive detail keys are omitted or redacted before they reach the browser.
+Browser mode remains redacted unless `--show-content` is supplied. In full-content mode the browser receives complete raw event fields, and each payload reference is a button that opens the stored artifact below the event. Tool-call IDs are correlated across related decisions and lifecycle rows so that the timeline says `apply_patch`, `exec_command`, or the relevant MCP/code-mode tool when Core recorded that identity. An `apply_patch` invocation also gets a dedicated view of the affected files and patch text, labeled explicitly as Codex's internal patch machinery rather than a shell or MCP call.
+
+The checked-in `run.sh` enables full-content mode by default through `OBSERVATORY_SHOW_CONTENT=1` in `.env`. This is intentional for the private teaching environment. Set it to `0` to return the live viewer to metadata-only mode, or invoke the viewer directly for either mode:
+
+```bash
+python3 tools/trace_viewer.py "$bundle" --serve --show-content
+python3 tools/trace_viewer.py "$bundle" --serve
+```
 
 For a deterministic no-cloud demonstration, run the checked-in synthetic trace:
 
@@ -124,7 +131,7 @@ python3 tools/trace_viewer.py tools/tests/fixtures/teaching_trace.jsonl
 python3 tools/trace_viewer.py tools/tests/fixtures/teaching_trace.jsonl --summary --harness-only
 ```
 
-> **Sensitive raw evidence:** Raw bundles and payload files can contain prompts, responses, tool arguments/results, paths, and other sensitive data. Use synthetic tasks for teaching, do not publish captures casually, and dispose of captures deliberately. The viewer does not open payload files and deliberately avoids printing stored prompt/message/file contents, but the bundle itself remains sensitive.
+> **Private teaching mode:** `run.sh` deliberately exposes prompts, responses, tool arguments/results, paths, and other stored payload content in the local viewer. This makes the agent loop legible for demonstration, but a captured bundle still contains everything shown. Do not reuse this full-content setting for ordinary work or publish a bundle without reviewing it.
 
 ## Focused verification
 
@@ -132,10 +139,10 @@ The integrated fork was checked with focused package tests and private synthetic
 
 - `cargo build -j 1 -p codex-cli` completed, and the development binary reports `codex-cli 0.149.0`;
 - five focused Core tests passed for context provenance, V2 eviction/reload, hook effects, and stop supervision;
-- `python3 -m unittest tools.tests.test_trace_viewer` passed 15 tests for timeline/filter/summary behavior, integrity rules, tailing, redaction, HTTP metadata, and malformed input;
+- `python3 -m unittest tools.tests.test_trace_viewer` passed 18 tests for timeline/filter/summary behavior, integrity rules, tailing, redaction, full-content delivery, artifact retrieval, HTTP metadata, and malformed input;
 - `node --check tools/trace_viewer_web/app.js` and `git diff --check` passed before the final formatter pass;
 - a private live patch run produced 81 raw events, including 60 harness events, changed the synthetic file, and passed `--check`;
 - a private live V2 spawn/wait run produced 140 raw events, including `agent_residency` and `agent_identity`, and passed `--check`; and
-- an isolated headless browser received 34 initial fixture events, filtered two decision rows, opened a redacted Guardian detail, buffered one appended event while paused, displayed it after resume, and filtered six rows by `tool_call_id=tool-9`.
+- an isolated headless browser received 34 initial fixture events, showed Guardian rows as decisions while naming their `apply_patch` relation, opened `payloads/tool-input.json` into a dedicated internal-patch view, and opened `payloads/request.json` to show the exact synthetic user prompt.
 
 `just fix -p codex-core` completed; its two mechanical fixes in instrumented paths were retained, while an unrelated upstream test cleanup was discarded. The Rust formatting stage also applied its change. The overall `just fmt` wrapper returned nonzero because this host lacks `dotslash` and its unrelated Python formatter could not write the uv cache; those host-tooling failures did not affect the Rust formatting result. No full workspace test suite was run.
