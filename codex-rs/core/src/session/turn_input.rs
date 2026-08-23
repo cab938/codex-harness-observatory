@@ -35,7 +35,12 @@ use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnInputSubmission;
 use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
+use codex_rollout_trace::HARNESS_CATEGORY_AGENT_LOOP;
+use codex_rollout_trace::HARNESS_PHASE_DECIDED;
+use codex_rollout_trace::HARNESS_PHASE_FAILED;
+use codex_rollout_trace::HarnessTraceEvent;
 use serde_json::Value;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -144,7 +149,11 @@ pub(super) async fn handle(
     mode: TurnInputMode,
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
-    match mode {
+    let input_kind = submitted_input_kind(&request.input);
+    let input_item_count = submitted_input_item_count(&request.input);
+    let additional_context_count = request.additional_context.len();
+    let mode_name = turn_input_mode_name(&mode);
+    let submission = match mode {
         TurnInputMode::StartOrSteer => start_or_steer(session, request, submission_id).await,
         TurnInputMode::StartIfIdle => {
             start_if_idle(session, request, submission_id, /*is_recovery*/ false).await
@@ -152,7 +161,16 @@ pub(super) async fn handle(
         TurnInputMode::Steer { expected_turn_id } => {
             steer(session, request, expected_turn_id, submission_id).await
         }
-    }
+    };
+    record_turn_input_disposition(
+        session,
+        mode_name,
+        input_kind,
+        input_item_count,
+        additional_context_count,
+        &submission,
+    );
+    submission
 }
 
 pub(super) async fn handle_recovery(
@@ -161,7 +179,9 @@ pub(super) async fn handle_recovery(
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
     let request = TurnInputRequest::user_input(Vec::new()).with_thread_settings(thread_settings);
-    start_if_idle(session, request, submission_id, /*is_recovery*/ true).await
+    let submission = start_if_idle(session, request, submission_id, /*is_recovery*/ true).await;
+    record_turn_input_disposition(session, "recovery", "user", 0, 0, &submission);
+    submission
 }
 
 async fn start_or_steer(
@@ -567,6 +587,102 @@ impl Session {
 
 fn has_nonempty_user_input(input: &SubmittedTurnInput) -> bool {
     matches!(input, SubmittedTurnInput::UserInput { content, .. } if !content.is_empty())
+}
+
+fn submitted_input_kind(input: &SubmittedTurnInput) -> &'static str {
+    match input {
+        SubmittedTurnInput::UserInput { .. } => "user",
+        SubmittedTurnInput::ResponseItem(_) => "response_item",
+        SubmittedTurnInput::InterAgentCommunication(_) => "inter_agent",
+    }
+}
+
+fn submitted_input_item_count(input: &SubmittedTurnInput) -> usize {
+    match input {
+        SubmittedTurnInput::UserInput { content, .. } => content.len(),
+        SubmittedTurnInput::ResponseItem(_) | SubmittedTurnInput::InterAgentCommunication(_) => 1,
+    }
+}
+
+fn turn_input_mode_name(mode: &TurnInputMode) -> &'static str {
+    match mode {
+        TurnInputMode::StartOrSteer => "start_or_steer",
+        TurnInputMode::StartIfIdle => "start_if_idle",
+        TurnInputMode::Steer { .. } => "steer",
+    }
+}
+
+fn not_submitted_reason_name(reason: &NotSubmittedReason) -> &'static str {
+    match reason {
+        NotSubmittedReason::NotIdle => "not_idle",
+        NotSubmittedReason::PendingTriggerTurn => "pending_trigger_turn",
+        NotSubmittedReason::PlanMode => "plan_mode",
+        NotSubmittedReason::NoActiveTurn => "no_active_turn",
+        NotSubmittedReason::ExpectedTurnMismatch { .. } => "expected_turn_mismatch",
+        NotSubmittedReason::ActiveTurnNotSteerable { .. } => "active_turn_not_steerable",
+        NotSubmittedReason::ActiveTurnOutputSchemaMismatch => "active_turn_output_schema_mismatch",
+        NotSubmittedReason::EmptyInput => "empty_input",
+    }
+}
+
+fn record_turn_input_disposition(
+    session: &Session,
+    mode: &'static str,
+    input_kind: &'static str,
+    input_item_count: usize,
+    additional_context_count: usize,
+    submission: &CodexResult<TurnInputSubmission>,
+) {
+    let event = HarnessTraceEvent::new(
+        HARNESS_CATEGORY_AGENT_LOOP,
+        "turn_input_disposition",
+        match submission {
+            Ok(_) => HARNESS_PHASE_DECIDED,
+            Err(_) => HARNESS_PHASE_FAILED,
+        },
+    )
+    .with_details(json!({
+        "mode": mode,
+        "input_kind": input_kind,
+        "input_item_count": input_item_count,
+        "additional_context_count": additional_context_count,
+    }));
+    match submission {
+        Ok(TurnInputSubmission::Started { turn_id }) => session
+            .services
+            .rollout_thread_trace
+            .record_harness_event(turn_id, event.with_outcome("start")),
+        Ok(TurnInputSubmission::Steered { turn_id }) => session
+            .services
+            .rollout_thread_trace
+            .record_harness_event(turn_id, event.with_outcome("steer")),
+        Ok(TurnInputSubmission::NotSubmitted { reason }) => {
+            let outcome = match reason {
+                NotSubmittedReason::NotIdle => "queue",
+                NotSubmittedReason::PendingTriggerTurn => "defer",
+                NotSubmittedReason::PlanMode
+                | NotSubmittedReason::NoActiveTurn
+                | NotSubmittedReason::ExpectedTurnMismatch { .. }
+                | NotSubmittedReason::ActiveTurnNotSteerable { .. }
+                | NotSubmittedReason::ActiveTurnOutputSchemaMismatch
+                | NotSubmittedReason::EmptyInput => "ignore",
+            };
+            session
+                .services
+                .rollout_thread_trace
+                .record_thread_harness_event(
+                    event
+                        .with_outcome(outcome)
+                        .with_reason(not_submitted_reason_name(reason)),
+                );
+        }
+        Err(_) => session
+            .services
+            .rollout_thread_trace
+            .record_thread_harness_event(
+                event.with_outcome("failure").with_reason("request_error"),
+            ),
+    }
 }
 
 async fn merge_additional_context_input(
