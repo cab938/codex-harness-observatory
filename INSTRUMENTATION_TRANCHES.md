@@ -104,6 +104,16 @@ Starts after the instrumentation tranches merge.
 
 Provide a dependency-light command that reads one `trace.jsonl`, filters by thread, turn, step, category, name, phase, or correlation, and prints a compact ordered timeline. It should also summarize counts and durations by category/name without creating a second persisted format. Add one small deterministic fixture or self-test and a short capture recipe using the development binary.
 
+Status: complete.
+
+Coverage delivered in `tools/trace_viewer.py` and `tools/tests/test_trace_viewer.py`:
+
+- accepts a bundle directory or `trace.jsonl`, streams checked raw `seq` order, and reports malformed lines with their line number;
+- shows raw packet/lifecycle and harness rows together, with filters for raw type, thread, turn, step, category, name, phase, and repeatable correlations;
+- prints count summaries and explicitly labelled matched lifecycle durations, without writing a derived trace format;
+- includes a hand-checkable synthetic fixture covering agent loop, Guardian/decision, patch/tool, multi-agent, inference, and tool lifecycle evidence; and
+- is standard-library-only, deterministic, and does not require cloud access or authentication.
+
 ## Verification budget
 
 Each tranche should run one focused check for its event path and one compile check for the directly affected crate. Do not run the full workspace test suite. Do not commit `codex-rs/Cargo.lock` changes caused only by the release-tag workspace version mismatch.
