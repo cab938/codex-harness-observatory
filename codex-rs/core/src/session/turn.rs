@@ -1838,7 +1838,7 @@ pub(crate) fn record_prompt_assembly(
                 "additional_tools": additional_tools_item_count,
                 "other": other_item_count,
             },
-            "input_modality_counts": {
+            "content_modality_counts": {
                 "text": text_input_count,
                 "image": image_input_count,
                 "audio": audio_input_count,

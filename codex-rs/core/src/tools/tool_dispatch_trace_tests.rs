@@ -460,7 +460,7 @@ async fn context_trace_records_step_and_prompt_provenance_without_source_content
         serde_json::json!(1)
     );
     assert_eq!(
-        prompt_event.trace.details["input_modality_counts"]["text"],
+        prompt_event.trace.details["content_modality_counts"]["text"],
         serde_json::json!(1)
     );
 
