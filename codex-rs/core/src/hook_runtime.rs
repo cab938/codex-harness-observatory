@@ -45,6 +45,7 @@ use codex_rollout::state_db;
 use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
 use serde_json::Value;
+use serde_json::json;
 use tracing::instrument;
 
 use crate::context::ContextualUserFragment;
@@ -55,6 +56,12 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
+use codex_rollout_trace::HARNESS_CATEGORY_SUPERVISION;
+use codex_rollout_trace::HARNESS_PHASE_COMPLETED;
+use codex_rollout_trace::HARNESS_PHASE_FAILED;
+use codex_rollout_trace::HARNESS_PHASE_OBSERVED;
+use codex_rollout_trace::HARNESS_PHASE_REQUESTED;
+use codex_rollout_trace::HarnessTraceEvent;
 
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
@@ -116,7 +123,7 @@ pub(crate) async fn run_pending_session_start_hooks(
         // Pending session-start hooks are reused to dispatch thread-spawn subagent
         // starts. Other subagent sessions are internal/system work and do not run
         // start hooks.
-        let target = match &turn_context.session_source {
+        let (target, hook_event) = match &turn_context.session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_role, .. })
                 if matches!(
                     session_start_source,
@@ -124,16 +131,22 @@ pub(crate) async fn run_pending_session_start_hooks(
                 ) =>
             {
                 let context = subagent_hook_context(sess, agent_role);
-                StartHookTarget::SubagentStart {
-                    turn_id: turn_context.sub_id.clone(),
-                    agent_id: context.agent_id,
-                    agent_type: context.agent_type,
-                }
+                (
+                    StartHookTarget::SubagentStart {
+                        turn_id: turn_context.sub_id.clone(),
+                        agent_id: context.agent_id,
+                        agent_type: context.agent_type,
+                    },
+                    "SubagentStart",
+                )
             }
             SessionSource::SubAgent(_) => return false,
-            _ => StartHookTarget::SessionStart {
-                source: session_start_source,
-            },
+            _ => (
+                StartHookTarget::SessionStart {
+                    source: session_start_source,
+                },
+                "SessionStart",
+            ),
         };
         let request = codex_hooks::SessionStartRequest {
             session_id: sess.session_id().into(),
@@ -149,6 +162,7 @@ pub(crate) async fn run_pending_session_start_hooks(
         if run_context_injecting_hook(
             sess,
             turn_context,
+            hook_event,
             preview_runs,
             hooks.run_session_start(request, Some(turn_context.sub_id.clone())),
         )
@@ -191,7 +205,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_pre_tool_use(&request);
-    emit_hook_started_events(sess, turn_context, preview_runs).await;
+    emit_hook_started_events(sess, turn_context, "PreToolUse", preview_runs).await;
 
     let PreToolUseOutcome {
         hook_events,
@@ -200,8 +214,20 @@ pub(crate) async fn run_pre_tool_use_hooks(
         additional_contexts,
         updated_input,
     } = hooks.run_pre_tool_use(request).await;
+    let additional_context_count = additional_contexts.len();
+    let input_updated = updated_input.is_some();
+    let applied_block = should_block && block_reason.is_some();
     emit_hook_completed_events(sess, turn_context, hook_events).await;
     record_additional_contexts(sess, turn_context, additional_contexts).await;
+    record_hook_effects(
+        sess,
+        turn_context,
+        "PreToolUse",
+        additional_context_count,
+        input_updated,
+        applied_block,
+        None,
+    );
 
     if !should_block {
         return PreToolUseHookResult::Continue { updated_input };
@@ -252,13 +278,26 @@ pub(crate) async fn run_permission_request_hooks(
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_permission_request(&request);
-    emit_hook_started_events(sess, turn_context, preview_runs).await;
+    emit_hook_started_events(sess, turn_context, "PermissionRequest", preview_runs).await;
 
     let PermissionRequestOutcome {
         hook_events,
         decision,
     } = hooks.run_permission_request(request).await;
     emit_hook_completed_events(sess, turn_context, hook_events).await;
+    let permission_effect = decision.as_ref().map(|decision| match decision {
+        PermissionRequestDecision::Allow => "permission_allowed",
+        PermissionRequestDecision::Deny { .. } => "permission_denied",
+    });
+    record_hook_effects(
+        sess,
+        turn_context,
+        "PermissionRequest",
+        /*additional_context_count*/ 0,
+        /*input_updated*/ false,
+        /*stopped*/ false,
+        permission_effect,
+    );
 
     decision
 }
@@ -295,9 +334,18 @@ pub(crate) async fn run_post_tool_use_hooks(
     };
     let hooks = sess.hooks();
     let preview_runs = hooks.preview_post_tool_use(&request);
-    emit_hook_started_events(sess, turn_context, preview_runs).await;
+    emit_hook_started_events(sess, turn_context, "PostToolUse", preview_runs).await;
 
     let outcome = hooks.run_post_tool_use(request).await;
+    record_hook_effects(
+        sess,
+        turn_context,
+        "PostToolUse",
+        outcome.additional_contexts.len(),
+        /*input_updated*/ false,
+        outcome.should_block,
+        None,
+    );
     emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
     outcome
 }
@@ -311,7 +359,7 @@ pub(crate) async fn run_turn_stop_hooks(
 ) -> StopOutcome {
     // Resolve the stop hook kind from the session source before building the
     // request. Root turns run Stop; thread-spawned child turns run SubagentStop.
-    let (target, transcript_path) = match &turn_context.session_source {
+    let (target, transcript_path, hook_event) = match &turn_context.session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             agent_role,
             parent_thread_id,
@@ -346,12 +394,26 @@ pub(crate) async fn run_turn_stop_hooks(
                     agent_transcript_path,
                 },
                 parent_transcript_path,
+                "SubagentStop",
             )
         }
         // Internal/synthetic subagents do not expose user-configured lifecycle
         // hooks, so there is no Stop or SubagentStop request to dispatch.
-        SessionSource::SubAgent(_) => return StopOutcome::default(),
-        _ => (StopHookTarget::Stop, sess.hook_transcript_path().await),
+        SessionSource::SubAgent(_) => {
+            record_hook_selection(
+                sess,
+                turn_context,
+                "Stop",
+                /*handler_count*/ 0,
+                "skipped",
+            );
+            return StopOutcome::default();
+        }
+        _ => (
+            StopHookTarget::Stop,
+            sess.hook_transcript_path().await,
+            "Stop",
+        ),
     };
     let request = codex_hooks::StopRequest {
         session_id: sess.session_id().into(),
@@ -366,10 +428,21 @@ pub(crate) async fn run_turn_stop_hooks(
         target,
     };
     let hooks = sess.hooks();
-    emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
+    emit_hook_started_events(sess, turn_context, hook_event, hooks.preview_stop(&request)).await;
 
     let mut outcome = hooks.run_stop(request).await;
     emit_hook_completed_events(sess, turn_context, std::mem::take(&mut outcome.hook_events)).await;
+    if !outcome.should_block {
+        record_hook_effects(
+            sess,
+            turn_context,
+            hook_event,
+            /*additional_context_count*/ 0,
+            /*input_updated*/ false,
+            outcome.should_stop,
+            None,
+        );
+    }
     outcome
 }
 
@@ -399,7 +472,7 @@ pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
     if let Err(err) = sess.flush_rollout().await {
         tracing::warn!("failed to flush transcript before SessionEnd hook: {err}");
     }
-    emit_hook_started_events(sess, &turn_context, preview_runs).await;
+    emit_hook_started_events(sess, &turn_context, "SessionEnd", preview_runs).await;
 
     let outcome = hooks.run_session_end(request).await;
     emit_hook_completed_events(sess, &turn_context, outcome.hook_events).await;
@@ -421,10 +494,19 @@ pub(crate) async fn run_pre_compact_hooks(
         trigger: compaction_trigger_label(trigger).to_string(),
     };
     let preview_runs = sess.hooks().preview_pre_compact(&request);
-    emit_hook_started_events(sess, turn_context, preview_runs).await;
+    emit_hook_started_events(sess, turn_context, "PreCompact", preview_runs).await;
 
     let outcome = sess.hooks().run_pre_compact(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
+    record_hook_effects(
+        sess,
+        turn_context,
+        "PreCompact",
+        /*additional_context_count*/ 0,
+        /*input_updated*/ false,
+        outcome.should_stop,
+        None,
+    );
     if outcome.should_stop {
         PreCompactHookOutcome::Stopped
     } else {
@@ -458,10 +540,19 @@ pub(crate) async fn run_post_compact_hooks(
         trigger: compaction_trigger_label(trigger).to_string(),
     };
     let preview_runs = sess.hooks().preview_post_compact(&request);
-    emit_hook_started_events(sess, turn_context, preview_runs).await;
+    emit_hook_started_events(sess, turn_context, "PostCompact", preview_runs).await;
 
     let outcome = sess.hooks().run_post_compact(request).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
+    record_hook_effects(
+        sess,
+        turn_context,
+        "PostCompact",
+        /*additional_context_count*/ 0,
+        /*input_updated*/ false,
+        outcome.should_stop,
+        None,
+    );
     if outcome.should_stop {
         PostCompactHookOutcome::Stopped
     } else {
@@ -560,6 +651,7 @@ pub(crate) async fn inspect_pending_input(
             run_context_injecting_hook(
                 sess,
                 turn_context,
+                "UserPromptSubmit",
                 preview_runs,
                 hooks.run_user_prompt_submit(request),
             )
@@ -625,6 +717,17 @@ pub(crate) async fn drain_async_hook_results(
             .filter(|entry| entry.kind == HookOutputEntryKind::Context)
             .map(|entry| entry.text.clone())
             .collect::<Vec<_>>();
+        if !additional_contexts.is_empty() {
+            record_hook_effects(
+                sess,
+                turn_context,
+                hook_event_name(result.run.event_name),
+                additional_contexts.len(),
+                /*input_updated*/ false,
+                /*stopped*/ false,
+                /*permission_effect*/ None,
+            );
+        }
 
         if before_user_prompt {
             record_additional_contexts(sess, turn_context, additional_contexts).await;
@@ -653,6 +756,7 @@ pub(crate) async fn drain_async_hook_results(
 async fn run_context_injecting_hook<Fut, Outcome>(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    hook_event: &str,
     preview_runs: Vec<HookRunSummary>,
     outcome_future: Fut,
 ) -> HookRuntimeOutcome
@@ -660,9 +764,18 @@ where
     Fut: Future<Output = Outcome>,
     Outcome: Into<ContextInjectingHookOutcome>,
 {
-    emit_hook_started_events(sess, turn_context, preview_runs).await;
+    emit_hook_started_events(sess, turn_context, hook_event, preview_runs).await;
 
     let outcome = outcome_future.await.into();
+    record_hook_effects(
+        sess,
+        turn_context,
+        hook_event,
+        outcome.outcome.additional_contexts.len(),
+        /*input_updated*/ false,
+        outcome.outcome.should_stop,
+        None,
+    );
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
     outcome.outcome
 }
@@ -704,12 +817,25 @@ fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<Response
 async fn emit_hook_started_events(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    hook_event: &str,
     preview_runs: Vec<HookRunSummary>,
 ) {
-    for run in preview_runs
-        .into_iter()
-        .filter(|run| run.execution_mode == HookExecutionMode::Sync)
-    {
+    record_hook_selection(
+        sess,
+        turn_context,
+        hook_event,
+        preview_runs.len(),
+        if preview_runs.is_empty() {
+            "none"
+        } else {
+            "selected"
+        },
+    );
+    for run in preview_runs.into_iter() {
+        record_hook_invocation(sess, turn_context, &run, HARNESS_PHASE_REQUESTED);
+        if run.execution_mode != HookExecutionMode::Sync {
+            continue;
+        }
         sess.send_event(
             turn_context,
             EventMsg::HookStarted(HookStartedEvent {
@@ -744,12 +870,197 @@ pub(crate) async fn emit_hook_completed_events(
     }
 
     for completed in completed_events {
+        record_hook_invocation(
+            sess,
+            turn_context,
+            &completed.run,
+            hook_invocation_phase(completed.run.status),
+        );
         emit_hook_completed_metrics(turn_context, &completed);
         track_hook_completed_analytics(sess, turn_context, &completed);
         if completed.run.execution_mode == HookExecutionMode::Sync {
             sess.send_event(turn_context, EventMsg::HookCompleted(completed))
                 .await;
         }
+    }
+}
+
+fn record_hook_selection(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    hook_event: &str,
+    handler_count: usize,
+    outcome: &str,
+) {
+    record_hook_harness_event(
+        sess,
+        turn_context,
+        hook_selection_event(hook_event, handler_count, outcome),
+    );
+}
+
+fn record_hook_invocation(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    run: &HookRunSummary,
+    phase: &str,
+) {
+    record_hook_harness_event(
+        sess,
+        turn_context,
+        HarnessTraceEvent::new(HARNESS_CATEGORY_SUPERVISION, "hook_invocation", phase)
+            .with_details(json!({
+                "hook_event": hook_event_name(run.event_name),
+                "handler_type": hook_handler_type_label(run.handler_type),
+                "execution_mode": hook_execution_mode_label(run.execution_mode),
+            }))
+            .with_correlation("hook_run_id", run.id.clone()),
+    );
+}
+
+fn record_hook_effects(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    hook_event: &str,
+    additional_context_count: usize,
+    input_updated: bool,
+    stopped: bool,
+    permission_effect: Option<&str>,
+) {
+    let mut recorded_effect = false;
+    if additional_context_count > 0 {
+        record_hook_effect(
+            sess,
+            turn_context,
+            hook_event,
+            "context_added",
+            /*additional_context_count*/ Some(additional_context_count),
+        );
+        recorded_effect = true;
+    }
+    if input_updated {
+        record_hook_effect(
+            sess,
+            turn_context,
+            hook_event,
+            "arguments_updated",
+            /*additional_context_count*/ None,
+        );
+        recorded_effect = true;
+    }
+    if stopped {
+        record_hook_effect(
+            sess,
+            turn_context,
+            hook_event,
+            "stopped",
+            /*additional_context_count*/ None,
+        );
+        recorded_effect = true;
+    }
+    if let Some(permission_effect) = permission_effect {
+        record_hook_effect(
+            sess,
+            turn_context,
+            hook_event,
+            permission_effect,
+            /*additional_context_count*/ None,
+        );
+        recorded_effect = true;
+    }
+    if !recorded_effect {
+        record_hook_effect(
+            sess,
+            turn_context,
+            hook_event,
+            "no_effect",
+            /*additional_context_count*/ None,
+        );
+    }
+}
+
+fn record_hook_effect(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    hook_event: &str,
+    outcome: &str,
+    additional_context_count: Option<usize>,
+) {
+    record_hook_harness_event(
+        sess,
+        turn_context,
+        hook_effect_event(hook_event, outcome, additional_context_count),
+    );
+}
+
+fn hook_selection_event(
+    hook_event: &str,
+    handler_count: usize,
+    outcome: &str,
+) -> HarnessTraceEvent {
+    HarnessTraceEvent::new(
+        HARNESS_CATEGORY_SUPERVISION,
+        "hook_selection",
+        HARNESS_PHASE_OBSERVED,
+    )
+    .with_outcome(outcome)
+    .with_details(json!({"hook_event": hook_event, "handler_count": handler_count}))
+}
+
+fn hook_effect_event(
+    hook_event: &str,
+    outcome: &str,
+    additional_context_count: Option<usize>,
+) -> HarnessTraceEvent {
+    let mut details = json!({"hook_event": hook_event});
+    if let Some(additional_context_count) = additional_context_count {
+        details = json!({
+            "hook_event": hook_event,
+            "additional_context_count": additional_context_count,
+        });
+    }
+    HarnessTraceEvent::new(
+        HARNESS_CATEGORY_SUPERVISION,
+        "hook_effect",
+        HARNESS_PHASE_OBSERVED,
+    )
+    .with_outcome(outcome)
+    .with_details(details)
+}
+
+fn record_hook_harness_event(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    event: HarnessTraceEvent,
+) {
+    sess.services
+        .rollout_thread_trace
+        .record_harness_event(turn_context.sub_id.clone(), event);
+}
+
+fn hook_invocation_phase(status: HookRunStatus) -> &'static str {
+    match status {
+        HookRunStatus::Running => HARNESS_PHASE_REQUESTED,
+        HookRunStatus::Completed | HookRunStatus::Blocked | HookRunStatus::Stopped => {
+            HARNESS_PHASE_COMPLETED
+        }
+        HookRunStatus::Failed => HARNESS_PHASE_FAILED,
+    }
+}
+
+fn hook_event_name(event_name: HookEventName) -> &'static str {
+    match event_name {
+        HookEventName::PreToolUse => "PreToolUse",
+        HookEventName::PermissionRequest => "PermissionRequest",
+        HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::PreCompact => "PreCompact",
+        HookEventName::PostCompact => "PostCompact",
+        HookEventName::SessionStart => "SessionStart",
+        HookEventName::SessionEnd => "SessionEnd",
+        HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
+        HookEventName::Stop => "Stop",
     }
 }
 
@@ -904,14 +1215,18 @@ mod tests {
     use super::additional_context_messages;
     use super::emit_hook_completed_events;
     use super::emit_hook_started_events;
+    use super::hook_effect_event;
     use super::hook_run_analytics_payload;
     use super::hook_run_metric_tags;
+    use super::hook_selection_event;
     use crate::session::tests::make_session_and_context;
     use crate::session::tests::make_session_and_context_with_rx;
     use codex_protocol::protocol::HookCompletedEvent;
     use codex_protocol::protocol::HookRunSummary;
+    use codex_rollout_trace::HarnessTraceEvent;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
+    use serde_json::json;
 
     #[test]
     fn additional_context_messages_stay_separate_and_ordered() {
@@ -949,6 +1264,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hook_boundary_events_record_only_categorical_effects() {
+        assert_eq!(
+            hook_selection_event("UserPromptSubmit", /*handler_count*/ 0, "none"),
+            HarnessTraceEvent::new("supervision", "hook_selection", "observed")
+                .with_outcome("none")
+                .with_details(json!({
+                    "hook_event": "UserPromptSubmit",
+                    "handler_count": 0,
+                })),
+        );
+        assert_eq!(
+            hook_effect_event(
+                "UserPromptSubmit",
+                "context_added",
+                /*additional_context_count*/ Some(2),
+            ),
+            HarnessTraceEvent::new("supervision", "hook_effect", "observed")
+                .with_outcome("context_added")
+                .with_details(json!({
+                    "hook_event": "UserPromptSubmit",
+                    "additional_context_count": 2,
+                })),
+        );
+    }
+
     #[tokio::test]
     async fn hook_lifecycle_notifications_only_report_synchronous_runs() {
         let (session, turn_context, events) = make_session_and_context_with_rx().await;
@@ -961,6 +1302,7 @@ mod tests {
         emit_hook_started_events(
             &session,
             &turn_context,
+            "Stop",
             vec![asynchronous_run.clone(), synchronous_run.clone()],
         )
         .await;

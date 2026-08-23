@@ -107,6 +107,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_rollout_trace::HARNESS_CATEGORY_AGENT_LOOP;
 use codex_rollout_trace::HARNESS_CATEGORY_CONTEXT;
+use codex_rollout_trace::HARNESS_CATEGORY_SUPERVISION;
 use codex_rollout_trace::HARNESS_PHASE_CANCELLED;
 use codex_rollout_trace::HARNESS_PHASE_COMPLETED;
 use codex_rollout_trace::HARNESS_PHASE_DECIDED;
@@ -599,6 +600,15 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
+                    record_step_harness_event(
+                        sess.as_ref(),
+                        step_context.as_ref(),
+                        stop_supervision_event(
+                            "evaluated",
+                            /*outcome*/ None,
+                            /*details*/ Some(json!({"stop_hook_active": stop_hook_active})),
+                        ),
+                    );
                     let stop_outcome = run_turn_stop_hooks(
                         &sess,
                         &turn_context,
@@ -610,6 +620,31 @@ pub(crate) async fn run_turn(
                         if let Some(hook_prompt_message) =
                             build_hook_prompt_message(&stop_outcome.continuation_fragments)
                         {
+                            record_step_harness_event(
+                                sess.as_ref(),
+                                step_context.as_ref(),
+                                HarnessTraceEvent::new(
+                                    HARNESS_CATEGORY_SUPERVISION,
+                                    "hook_effect",
+                                    "observed",
+                                )
+                                .with_outcome("continued")
+                                .with_details(json!({
+                                    "hook_event": "Stop",
+                                    "continuation_fragment_count": stop_outcome.continuation_fragments.len(),
+                                })),
+                            );
+                            record_step_harness_event(
+                                sess.as_ref(),
+                                step_context.as_ref(),
+                                stop_supervision_event(
+                                    "continued",
+                                    /*outcome*/ Some("continued"),
+                                    /*details*/ Some(json!({
+                                        "continuation_fragment_count": stop_outcome.continuation_fragments.len(),
+                                    })),
+                                ),
+                            );
                             record_step_harness_event(
                                 sess.as_ref(),
                                 step_context.as_ref(),
@@ -651,6 +686,15 @@ pub(crate) async fn run_turn(
                         record_step_harness_event(
                             sess.as_ref(),
                             step_context.as_ref(),
+                            stop_supervision_event(
+                                "completed",
+                                /*outcome*/ Some("hook_stopped"),
+                                /*details*/ None,
+                            ),
+                        );
+                        record_step_harness_event(
+                            sess.as_ref(),
+                            step_context.as_ref(),
                             HarnessTraceEvent::new(
                                 HARNESS_CATEGORY_AGENT_LOOP,
                                 "agent_step_next_action",
@@ -682,6 +726,15 @@ pub(crate) async fn run_turn(
                         );
                         return Ok(None);
                     }
+                    record_step_harness_event(
+                        sess.as_ref(),
+                        step_context.as_ref(),
+                        stop_supervision_event(
+                            "completed",
+                            /*outcome*/ Some("model_completed"),
+                            /*details*/ None,
+                        ),
+                    );
                     record_step_harness_event(
                         sess.as_ref(),
                         step_context.as_ref(),
@@ -832,6 +885,21 @@ fn record_step_harness_event(sess: &Session, step_context: &StepContext, event: 
         &step_context.turn.sub_id,
         event.with_optional_step_id(step_context.trace_step_id.clone()),
     );
+}
+
+fn stop_supervision_event(
+    phase: &str,
+    outcome: Option<&str>,
+    details: Option<serde_json::Value>,
+) -> HarnessTraceEvent {
+    let mut event = HarnessTraceEvent::new(HARNESS_CATEGORY_SUPERVISION, "stop_supervision", phase);
+    if let Some(outcome) = outcome {
+        event = event.with_outcome(outcome);
+    }
+    if let Some(details) = details {
+        event = event.with_details(details);
+    }
+    event
 }
 
 fn compaction_reason_name(reason: CompactionReason) -> &'static str {
