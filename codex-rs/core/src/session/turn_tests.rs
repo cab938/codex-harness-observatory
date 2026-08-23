@@ -4,6 +4,7 @@ use codex_extension_api::TurnItemContributor;
 use codex_protocol::ResponseItemId;
 use codex_protocol::items::AgentMessageContent;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::sync::Arc;
 use tracing_subscriber::prelude::*;
 
@@ -56,6 +57,29 @@ fn post_sampling_token_estimate_is_disabled_by_always_on_sinks() {
             message
         ));
     });
+}
+
+#[test]
+fn stop_supervision_distinguishes_continuation_from_completion() {
+    assert_eq!(
+        stop_supervision_event(
+            "continued",
+            /*outcome*/ Some("continued"),
+            /*details*/ Some(json!({"continuation_fragment_count": 2})),
+        ),
+        HarnessTraceEvent::new("supervision", "stop_supervision", "continued")
+            .with_outcome("continued")
+            .with_details(json!({"continuation_fragment_count": 2})),
+    );
+    assert_eq!(
+        stop_supervision_event(
+            "completed",
+            /*outcome*/ Some("model_completed"),
+            /*details*/ None,
+        ),
+        HarnessTraceEvent::new("supervision", "stop_supervision", "completed")
+            .with_outcome("model_completed"),
+    );
 }
 
 #[tokio::test]
