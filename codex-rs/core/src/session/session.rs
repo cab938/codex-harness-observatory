@@ -1443,7 +1443,7 @@ impl Session {
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
                 async_hook_results,
-                input_queue: InputQueue::new(),
+                input_queue: InputQueue::with_trace(services.rollout_thread_trace.clone()),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 git_enrichment_policy,

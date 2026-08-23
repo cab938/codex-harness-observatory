@@ -2,6 +2,7 @@ use super::*;
 use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v1;
 use codex_protocol::error::CodexErrorDetails;
 use codex_tools::ToolSpec;
+use serde_json::json;
 
 pub(crate) struct Handler;
 
@@ -34,6 +35,7 @@ async fn handle_close_agent(
         turn,
         payload,
         call_id,
+        step_context,
         ..
     } = invocation;
     let arguments = function_arguments(payload)?;
@@ -97,6 +99,16 @@ async fn handle_close_agent(
             return Err(collab_agent_error(agent_id, err));
         }
     };
+    record_multi_agent_event(
+        &session,
+        &turn,
+        step_context.trace_step_id.clone(),
+        multi_agent_event("agent_close", "requested")
+            .with_correlation("parent_thread_id", session.thread_id.to_string())
+            .with_correlation("target_thread_id", agent_id.to_string())
+            .with_correlation("tool_call_id", call_id.clone())
+            .with_details(json!({"previous_status": agent_status_name(&status)})),
+    );
     let result = Box::pin(session.services.agent_control.close_agent(agent_id))
         .await
         .map_err(|err| collab_agent_error(agent_id, err))
@@ -105,7 +117,7 @@ async fn handle_close_agent(
         .emit_turn_item_completed(
             &turn,
             TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
-                id: call_id,
+                id: call_id.clone(),
                 tool: CollabAgentTool::CloseAgent,
                 status: collab_tool_call_status(&status, Some(agent_id)),
                 sender_thread_id: session.thread_id,
@@ -122,7 +134,33 @@ async fn handle_close_agent(
             }),
         )
         .await;
-    result?;
+    if let Err(err) = result {
+        record_multi_agent_event(
+            &session,
+            &turn,
+            step_context.trace_step_id.clone(),
+            multi_agent_event("agent_close", "failed")
+                .with_reason("close_error")
+                .with_correlation("parent_thread_id", session.thread_id.to_string())
+                .with_correlation("target_thread_id", agent_id.to_string())
+                .with_correlation("tool_call_id", call_id.clone()),
+        );
+        return Err(err);
+    }
+    let resulting_status = session.services.agent_control.get_status(agent_id).await;
+    record_multi_agent_event(
+        &session,
+        &turn,
+        step_context.trace_step_id.clone(),
+        multi_agent_event("agent_close", "resolved")
+            .with_correlation("parent_thread_id", session.thread_id.to_string())
+            .with_correlation("target_thread_id", agent_id.to_string())
+            .with_correlation("tool_call_id", call_id.clone())
+            .with_details(json!({
+                "previous_status": agent_status_name(&status),
+                "resulting_status": agent_status_name(&resulting_status)
+            })),
+    );
 
     Ok(CloseAgentResult {
         previous_status: status,

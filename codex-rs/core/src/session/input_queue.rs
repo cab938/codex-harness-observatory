@@ -7,8 +7,12 @@ use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::user_input::UserInput;
+use codex_rollout_trace::HARNESS_CATEGORY_MULTI_AGENT;
+use codex_rollout_trace::HarnessTraceEvent;
+use codex_rollout_trace::ThreadTraceContext;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::json;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -85,6 +89,7 @@ pub(crate) struct TurnInputQueue {
 pub(crate) struct InputQueue {
     activity_tx: watch::Sender<InputQueueActivity>,
     mailbox_pending_mails: Mutex<VecDeque<PendingMailboxCommunication>>,
+    trace: ThreadTraceContext,
 }
 
 struct PendingMailboxCommunication {
@@ -95,11 +100,17 @@ struct PendingMailboxCommunication {
 }
 
 impl InputQueue {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::with_trace(ThreadTraceContext::disabled())
+    }
+
+    pub(crate) fn with_trace(trace: ThreadTraceContext) -> Self {
         let (activity_tx, _) = watch::channel(InputQueueActivity::Mailbox);
         Self {
             activity_tx,
             mailbox_pending_mails: Mutex::new(VecDeque::new()),
+            trace,
         }
     }
 
@@ -132,15 +143,27 @@ impl InputQueue {
         parent_turn_id: Option<String>,
         root_turn_id: Option<String>,
     ) {
-        self.mailbox_pending_mails
-            .lock()
-            .await
-            .push_back(PendingMailboxCommunication {
+        let message_id = communication.id.as_ref().map(ToString::to_string);
+        let trigger_turn = communication.trigger_turn;
+        let pending_count = {
+            let mut pending_mails = self.mailbox_pending_mails.lock().await;
+            pending_mails.push_back(PendingMailboxCommunication {
                 communication,
                 parent_turn_id,
                 root_turn_id,
                 _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
             });
+            pending_mails.len()
+        };
+        let mut event =
+            HarnessTraceEvent::new(HARNESS_CATEGORY_MULTI_AGENT, "agent_message", "enqueued")
+                .with_details(
+                    json!({"trigger_turn": trigger_turn, "pending_count": pending_count}),
+                );
+        if let Some(message_id) = message_id {
+            event = event.with_correlation("message_id", message_id);
+        }
+        self.trace.record_thread_harness_event(event);
         self.activity_tx.send_replace(InputQueueActivity::Mailbox);
     }
 
@@ -182,10 +205,28 @@ impl InputQueue {
             })
             .reduce(|expected, candidate| expected.filter(|id| candidate == Some(*id)))
             .and_then(|id| id.filter(|id| !id.trim().is_empty()).map(str::to_string));
-        let items = pending_mails
+        let message_ids = pending_mails
+            .iter()
+            .filter_map(|mail| mail.communication.id.as_ref().map(ToString::to_string))
+            .collect::<Vec<_>>();
+        let trigger_turn_count = pending_mails
+            .iter()
+            .filter(|mail| mail.communication.trigger_turn)
+            .count();
+        let items: Vec<TurnInput> = pending_mails
             .into_iter()
             .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
             .collect();
+        if !items.is_empty() {
+            self.trace.record_thread_harness_event(
+                HarnessTraceEvent::new(HARNESS_CATEGORY_MULTI_AGENT, "agent_message", "delivered")
+                    .with_details(json!({
+                        "message_count": items.len(),
+                        "trigger_turn_count": trigger_turn_count,
+                        "message_ids": message_ids
+                    })),
+            );
+        }
         (items, parent_turn_id, root_turn_id)
     }
 
@@ -232,6 +273,11 @@ impl InputQueue {
             return;
         }
         turn_state.set_mailbox_delivery_phase(MailboxDeliveryPhase::NextTurn);
+        self.trace.record_thread_harness_event(
+            HarnessTraceEvent::new(HARNESS_CATEGORY_MULTI_AGENT, "agent_message", "deferred")
+                .with_reason("next_turn")
+                .with_details(json!({"reason": "mailbox_only_pending_input"})),
+        );
     }
 
     pub(crate) async fn accept_mailbox_delivery_for_current_turn(
@@ -255,6 +301,12 @@ impl InputQueue {
             .lock()
             .await
             .accept_mailbox_delivery_for_current_turn();
+        self.trace
+            .record_thread_harness_event(HarnessTraceEvent::new(
+                HARNESS_CATEGORY_MULTI_AGENT,
+                "agent_message",
+                "accepted",
+            ));
     }
 
     pub(super) async fn extend_pending_input_and_accept_mailbox_delivery_for_turn_state(

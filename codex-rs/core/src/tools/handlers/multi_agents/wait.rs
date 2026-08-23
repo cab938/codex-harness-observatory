@@ -8,6 +8,7 @@ use codex_tools::ToolSpec;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,6 +59,7 @@ impl Handler {
             turn,
             payload,
             call_id,
+            step_context,
             ..
         } = invocation;
         let arguments = function_arguments(payload)?;
@@ -95,6 +97,18 @@ impl Handler {
             }
             ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
         };
+
+        record_multi_agent_event(
+            &session,
+            &turn,
+            step_context.trace_step_id.clone(),
+            multi_agent_event("agent_wait", "requested")
+                .with_correlation("parent_thread_id", session.thread_id.to_string())
+                .with_correlation("tool_call_id", call_id.clone())
+                .with_details(
+                    json!({"target_count": receiver_thread_ids.len(), "timeout_ms": timeout_ms}),
+                ),
+        );
 
         session
             .emit_turn_item_started(
@@ -187,6 +201,13 @@ impl Handler {
 
         let timed_out = statuses.is_empty();
         let statuses_by_id = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+        let status_summary =
+            statuses_by_id
+                .values()
+                .fold(HashMap::<&str, usize>::new(), |mut counts, status| {
+                    *counts.entry(agent_status_name(status)).or_default() += 1;
+                    counts
+                });
         let result = WaitAgentResult {
             status: statuses
                 .into_iter()
@@ -200,11 +221,30 @@ impl Handler {
             timed_out,
         };
 
+        record_multi_agent_event(
+            &session,
+            &turn,
+            step_context.trace_step_id.clone(),
+            multi_agent_event("agent_wait", "resolved")
+                .with_outcome(if timed_out {
+                    "timeout"
+                } else {
+                    "status_change"
+                })
+                .with_correlation("parent_thread_id", session.thread_id.to_string())
+                .with_correlation("tool_call_id", call_id.clone())
+                .with_details(json!({
+                    "target_count": receiver_thread_ids.len(),
+                    "resolved_count": statuses_by_id.len(),
+                    "status_summary": status_summary
+                })),
+        );
+
         session
             .emit_turn_item_completed(
                 &turn,
                 TurnItem::CollabAgentToolCall(CollabAgentToolCallItem {
-                    id: call_id,
+                    id: call_id.clone(),
                     tool: CollabAgentTool::Wait,
                     status: wait_tool_call_status(&statuses_by_id),
                     sender_thread_id: session.thread_id,

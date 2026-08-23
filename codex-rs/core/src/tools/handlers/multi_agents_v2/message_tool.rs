@@ -7,6 +7,7 @@ use super::*;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::tools::context::FunctionToolOutput;
+use serde_json::json;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MessageDeliveryMode {
@@ -61,9 +62,24 @@ pub(crate) async fn handle_message_string_tool(
         turn,
         call_id,
         source,
+        step_context,
         ..
     } = invocation;
-    let receiver_thread_id = resolve_agent_target(&session, &turn, &target).await?;
+    let receiver_thread_id =
+        resolve_agent_target(&session, &turn, step_context.trace_step_id.clone(), &target).await?;
+    record_multi_agent_event(
+        &session,
+        &turn,
+        step_context.trace_step_id.clone(),
+        multi_agent_event("agent_message", "requested")
+            .with_correlation("parent_thread_id", session.thread_id.to_string())
+            .with_correlation("target_thread_id", receiver_thread_id.to_string())
+            .with_correlation("tool_call_id", call_id.clone())
+            .with_details(json!({
+                "delivery_mode": if mode == MessageDeliveryMode::TriggerTurn { "followup" } else { "queued" },
+                "trigger_turn": mode.trigger_turn()
+            })),
+    );
     let receiver_agent = session
         .services
         .agent_control
@@ -117,9 +133,36 @@ pub(crate) async fn handle_message_string_tool(
             parent_turn_id,
             turn.turn_metadata_state.root_turn_id(),
         )
-        .await
-        .map_err(|err| collab_agent_error(receiver_thread_id, err));
-    result?;
+        .await;
+    match result {
+        Ok(message_id) => {
+            record_multi_agent_event(
+                &session,
+                &turn,
+                step_context.trace_step_id.clone(),
+                multi_agent_event("agent_message", "enqueued")
+                    .with_correlation("parent_thread_id", session.thread_id.to_string())
+                    .with_correlation("target_thread_id", receiver_thread_id.to_string())
+                    .with_correlation("tool_call_id", call_id.clone())
+                    .with_correlation("message_id", message_id.clone())
+                    .with_details(json!({"trigger_turn": mode.trigger_turn()})),
+            );
+        }
+        Err(err) => {
+            record_multi_agent_event(
+                &session,
+                &turn,
+                step_context.trace_step_id.clone(),
+                multi_agent_event("agent_message", "rejected")
+                    .with_reason("submission_error")
+                    .with_correlation("parent_thread_id", session.thread_id.to_string())
+                    .with_correlation("target_thread_id", receiver_thread_id.to_string())
+                    .with_correlation("tool_call_id", call_id.clone())
+                    .with_details(json!({"trigger_turn": mode.trigger_turn()})),
+            );
+            return Err(collab_agent_error(receiver_thread_id, err));
+        }
+    }
     emit_sub_agent_activity(
         &session,
         &turn,

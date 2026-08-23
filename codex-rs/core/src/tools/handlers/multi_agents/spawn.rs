@@ -8,6 +8,7 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
 use codex_tools::ToolSpec;
+use serde_json::json;
 
 #[derive(Default)]
 pub(crate) struct Handler {
@@ -65,10 +66,36 @@ async fn handle_spawn_agent(
     let child_depth = next_thread_spawn_depth(&session_source);
     let max_depth = turn.config.agent_max_depth;
     if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
+        record_multi_agent_event(
+            &session,
+            turn,
+            step_context.trace_step_id.clone(),
+            multi_agent_event("agent_spawn_admission", "rejected")
+                .with_reason("depth_limit")
+                .with_correlation("parent_thread_id", session.thread_id.to_string())
+                .with_correlation("tool_call_id", call_id.clone())
+                .with_details(json!({"child_depth": child_depth, "max_depth": max_depth})),
+        );
         return Err(FunctionCallError::RespondToModel(
             "Agent depth limit reached. Solve the task yourself.".to_string(),
         ));
     }
+    record_multi_agent_event(
+        &session,
+        turn,
+        step_context.trace_step_id.clone(),
+        multi_agent_event("agent_spawn_admission", "accepted")
+            .with_correlation("parent_thread_id", session.thread_id.to_string())
+            .with_correlation("tool_call_id", call_id.clone())
+            .with_details(json!({
+                "child_depth": child_depth,
+                "max_depth": max_depth,
+                "fork_mode": if args.fork_context { "full_history" } else { "none" },
+                "role_override": role_name.is_some(),
+                "model_override": args.model.is_some(),
+                "reasoning_override": args.reasoning_effort.is_some()
+            })),
+    );
     session
         .emit_turn_item_started(
             turn,
@@ -114,6 +141,16 @@ async fn handle_spawn_agent(
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
 
+    record_multi_agent_event(
+        &session,
+        turn,
+        step_context.trace_step_id.clone(),
+        multi_agent_event("agent_spawn", "requested")
+            .with_correlation("parent_thread_id", session.thread_id.to_string())
+            .with_correlation("tool_call_id", call_id.clone())
+            .with_details(json!({"child_depth": child_depth})),
+    );
+
     let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
         config,
         input_items,
@@ -134,8 +171,30 @@ async fn handle_spawn_agent(
             multi_agent_v2_usage_hints: None,
         },
     ))
-    .await
-    .map_err(collab_spawn_error);
+    .await;
+    match &result {
+        Ok(spawned_agent) => record_multi_agent_event(
+            &session,
+            turn,
+            step_context.trace_step_id.clone(),
+            multi_agent_event("agent_spawn", "started")
+                .with_correlation("parent_thread_id", session.thread_id.to_string())
+                .with_correlation("child_thread_id", spawned_agent.thread_id.to_string())
+                .with_correlation("tool_call_id", call_id.clone())
+                .with_details(json!({"child_depth": child_depth})),
+        ),
+        Err(_) => record_multi_agent_event(
+            &session,
+            turn,
+            step_context.trace_step_id.clone(),
+            multi_agent_event("agent_spawn", "failed")
+                .with_reason("spawn_error")
+                .with_correlation("parent_thread_id", session.thread_id.to_string())
+                .with_correlation("tool_call_id", call_id.clone())
+                .with_details(json!({"child_depth": child_depth})),
+        ),
+    }
+    let result = result.map_err(collab_spawn_error);
     let (new_thread_id, new_agent_metadata, status) = match &result {
         Ok(spawned_agent) => (
             Some(spawned_agent.thread_id),
