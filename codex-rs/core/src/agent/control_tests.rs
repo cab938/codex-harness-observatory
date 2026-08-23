@@ -712,7 +712,7 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
     let (home, mut config) = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
     let _ = config.features.enable(Feature::Sqlite);
-    config.multi_agent_v2.max_concurrent_threads_per_session = 1;
+    config.multi_agent_v2.max_concurrent_threads_per_session = 2;
     config.model = Some("gpt-5.6-sol".to_string());
     let harness = AgentControlHarness::new_with_config(home, config).await;
     let (parent_thread_id, _parent_thread) = harness.start_paginated_thread().await;

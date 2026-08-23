@@ -370,7 +370,7 @@ impl AgentControl {
             None,
         )
         .await;
-        let residency_slot = self
+        let residency_slot = match self
             .reserve_v2_residency_slot(
                 &state,
                 &config,
@@ -378,7 +378,22 @@ impl AgentControl {
                 stored_parent_thread_id,
                 Some(thread_id),
             )
-            .await?;
+            .await
+        {
+            Ok(slot) => slot,
+            Err(err) => {
+                self.record_v2_thread_event(
+                    &state,
+                    Some(thread_id),
+                    stored_parent_thread_id,
+                    "agent_reload",
+                    "failed",
+                    Some("residency_unavailable"),
+                )
+                .await;
+                return Err(err);
+            }
+        };
 
         let parent_thread_id = initial_history
             .get_resumed_parent_thread_id()
