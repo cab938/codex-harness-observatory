@@ -266,6 +266,40 @@ class TraceViewerTest(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=2)
 
+    def test_waiting_server_binds_before_the_first_bundle_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            server = trace_viewer.make_viewer_server(
+                root,
+                "127.0.0.1",
+                0,
+                wait_for_bundle=True,
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                host, port = server.server_address[:2]
+                with urllib.request.urlopen(f"http://{host}:{port}/api/header") as response:
+                    waiting = json.load(response)
+                self.assertEqual(waiting["stream_mode"], "waiting_for_trace_bundle")
+
+                bundle = root / "trace-demo"
+                bundle.mkdir()
+                (bundle / "trace.jsonl").write_text(self.raw_event_line(1), encoding="utf-8")
+                (bundle / "manifest.json").write_text(
+                    json.dumps({"trace_id": "trace-after-start"}),
+                    encoding="utf-8",
+                )
+
+                with urllib.request.urlopen(f"http://{host}:{port}/api/header") as response:
+                    active = json.load(response)
+                self.assertEqual(active["trace_id"], "trace-after-start")
+                self.assertEqual(active["stream_mode"], "append_only_jsonl")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
     @staticmethod
     def raw_event_line(seq):
         return json.dumps(

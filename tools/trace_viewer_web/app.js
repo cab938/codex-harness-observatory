@@ -6,6 +6,7 @@ const state = {
   visibleCount: null,
   followLive: true,
   streamOpen: false,
+  waitingForTrace: false,
   renderQueued: false,
   options: {
     payloadTypes: new Set(),
@@ -217,10 +218,8 @@ function receiveEvent(event) {
   scheduleStreamRender();
 }
 
-async function loadHeader() {
-  const response = await fetch('/api/header', { cache: 'no-store' });
-  if (!response.ok) throw new Error(`Header request failed (${response.status})`);
-  const metadata = await response.json();
+function displayHeader(metadata) {
+  state.waitingForTrace = metadata.stream_mode === 'waiting_for_trace_bundle';
   elements.metaTrace.textContent = text(metadata.trace_id, metadata.source_name);
   elements.metaTrace.title = elements.metaTrace.textContent;
   elements.metaRollout.textContent = text(metadata.rollout_id);
@@ -232,11 +231,23 @@ async function loadHeader() {
   elements.metaFormat.title = `${text(metadata.raw_event_log)}; bundle v${text(metadata.manifest_schema_version, '?')}; ${text(metadata.stream_mode)}`;
 }
 
+async function loadHeader() {
+  const response = await fetch('/api/header', { cache: 'no-store' });
+  if (!response.ok) throw new Error(`Header request failed (${response.status})`);
+  displayHeader(await response.json());
+}
+
 function connect() {
   setConnection('connecting', 'Connecting');
   const source = new EventSource('/api/stream');
   source.addEventListener('open', () => {
     state.streamOpen = true;
+    if (state.waitingForTrace) setConnection('connecting', 'Waiting for first task');
+    else setConnection(state.paused ? 'paused' : 'live', state.paused ? 'Paused' : 'Live');
+  });
+  source.addEventListener('trace-source', (message) => {
+    const update = JSON.parse(message.data);
+    displayHeader(update.metadata);
     setConnection(state.paused ? 'paused' : 'live', state.paused ? 'Paused' : 'Live');
   });
   source.addEventListener('trace', (message) => {

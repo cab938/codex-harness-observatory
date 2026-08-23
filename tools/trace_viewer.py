@@ -156,6 +156,25 @@ def trace_path(input_path: str) -> Path:
     return path
 
 
+def trace_root_path(input_path: str) -> Path:
+    path = Path(input_path)
+    if not path.is_dir():
+        raise TraceInputError(f"trace root directory not found: {path}")
+    return path
+
+
+def discover_trace(root: Path) -> Path | None:
+    try:
+        candidates = sorted(
+            child / "trace.jsonl"
+            for child in root.iterdir()
+            if child.is_dir() and (child / "trace.jsonl").is_file()
+        )
+    except OSError as error:
+        raise TraceInputError(f"cannot inspect trace root: {error}") from error
+    return candidates[0] if candidates else None
+
+
 def parse_event_line(
     line: str,
     *,
@@ -706,10 +725,23 @@ class TraceViewerHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], trace: Path):
+    def __init__(
+        self,
+        address: tuple[str, int],
+        trace: Path | None,
+        trace_root: Path | None = None,
+    ):
         self.trace_path = trace
+        self.trace_root = trace_root
+        self.trace_lock = threading.Lock()
         self.stop_event = threading.Event()
         super().__init__(address, TraceViewerRequestHandler)
+
+    def resolve_trace_path(self) -> Path | None:
+        with self.trace_lock:
+            if self.trace_path is None and self.trace_root is not None:
+                self.trace_path = discover_trace(self.trace_root)
+            return self.trace_path
 
     def server_close(self) -> None:
         self.stop_event.set()
@@ -774,8 +806,25 @@ class TraceViewerRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.end_headers()
         try:
+            trace_path = self.viewer_server.resolve_trace_path()
+            waiting_for_bundle = trace_path is None
+            last_heartbeat = time.monotonic()
+            while trace_path is None and not self.viewer_server.stop_event.is_set():
+                if time.monotonic() - last_heartbeat >= 10:
+                    self.wfile.write(b": waiting for first trace bundle\n\n")
+                    self.wfile.flush()
+                    last_heartbeat = time.monotonic()
+                self.viewer_server.stop_event.wait(0.15)
+                trace_path = self.viewer_server.resolve_trace_path()
+            if trace_path is None:
+                return
+            if waiting_for_bundle:
+                update = {"kind": "source", "metadata": manifest_metadata(trace_path)}
+                data = json.dumps(update, separators=(",", ":"), ensure_ascii=True)
+                self.wfile.write(f"event: trace-source\ndata: {data}\n\n".encode("utf-8"))
+                self.wfile.flush()
             for update in tail_updates(
-                self.viewer_server.trace_path,
+                trace_path,
                 after_seq=after_seq,
                 stop_event=self.viewer_server.stop_event,
             ):
@@ -806,10 +855,22 @@ class TraceViewerRequestHandler(BaseHTTPRequestHandler):
             self.send_bytes(b"", "image/x-icon", HTTPStatus.NO_CONTENT)
         elif parsed.path == "/api/header":
             try:
-                self.send_json(manifest_metadata(self.viewer_server.trace_path))
+                trace_path = self.viewer_server.resolve_trace_path()
+                if trace_path is None:
+                    trace_root = self.viewer_server.trace_root
+                    self.send_json(
+                        {
+                            "source_name": trace_root.name if trace_root else "pending",
+                            "stream_mode": "waiting_for_trace_bundle",
+                            "raw_event_log": "trace.jsonl",
+                        }
+                    )
+                else:
+                    self.send_json(manifest_metadata(trace_path))
             except TraceInputError as error:
+                source = self.viewer_server.trace_root or Path("trace.jsonl")
                 self.send_json(
-                    {"error": safe_stream_error(error, self.viewer_server.trace_path.parent)},
+                    {"error": safe_stream_error(error, source)},
                     HTTPStatus.UNPROCESSABLE_ENTITY,
                 )
         elif parsed.path == "/api/stream":
@@ -818,15 +879,25 @@ class TraceViewerRequestHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
 
-def make_viewer_server(path: Path, host: str, port: int) -> TraceViewerHTTPServer:
+def make_viewer_server(
+    path: Path,
+    host: str,
+    port: int,
+    *,
+    wait_for_bundle: bool = False,
+) -> TraceViewerHTTPServer:
     try:
-        return TraceViewerHTTPServer((host, port), path)
+        return TraceViewerHTTPServer(
+            (host, port),
+            None if wait_for_bundle else path,
+            path if wait_for_bundle else None,
+        )
     except OSError as error:
         raise TraceInputError(f"cannot bind viewer at {host}:{port}: {error}") from error
 
 
-def serve_viewer(path: Path, host: str, port: int) -> int:
-    server = make_viewer_server(path, host, port)
+def serve_viewer(path: Path, host: str, port: int, *, wait_for_bundle: bool = False) -> int:
+    server = make_viewer_server(path, host, port, wait_for_bundle=wait_for_bundle)
     bound_host, bound_port = server.server_address[:2]
     display_host = "127.0.0.1" if bound_host in {"0.0.0.0", "::"} else bound_host
     print(f"Codex Harness Observatory: http://{display_host}:{bound_port}", flush=True)
@@ -922,7 +993,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--check exit status: 0 = clean, 1 = integrity findings, 2 = malformed or unreadable input"
         ),
     )
-    parser.add_argument("input", help="trace bundle directory or trace.jsonl")
+    parser.add_argument("input", help="trace bundle directory, trace.jsonl, or trace root with --wait-for-bundle")
     parser.add_argument("--payload-type", action="append", default=[], metavar="TYPE", help="raw payload type (repeatable)")
     parser.add_argument("--thread", action="append", default=[], help="thread ID (repeatable)")
     parser.add_argument("--turn", action="append", default=[], help="Codex turn ID (repeatable)")
@@ -945,6 +1016,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="serve the unified live viewer and tail appended events",
     )
     parser.add_argument(
+        "--wait-for-bundle",
+        action="store_true",
+        help="bind immediately and wait for the first trace bundle under INPUT (requires --serve)",
+    )
+    parser.add_argument(
         "--host",
         default="127.0.0.1",
         help="viewer bind host (default: 127.0.0.1)",
@@ -963,11 +1039,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not 0 <= args.port <= 65535:
         print("trace-viewer: error: port must be between 0 and 65535", file=sys.stderr)
         return 2
+    if args.wait_for_bundle and not args.serve:
+        print("trace-viewer: error: --wait-for-bundle requires --serve", file=sys.stderr)
+        return 2
     filters = Filters(
         set(args.payload_type), set(args.thread), set(args.turn), set(args.step),
         set(args.category), set(args.name), set(args.phase), tuple(args.correlation), args.harness_only,
     )
     try:
+        if args.wait_for_bundle:
+            root = trace_root_path(args.input)
+            return serve_viewer(
+                root,
+                args.host,
+                args.port,
+                wait_for_bundle=True,
+            )
         path = trace_path(args.input)
         if args.serve:
             return serve_viewer(path, args.host, args.port)
