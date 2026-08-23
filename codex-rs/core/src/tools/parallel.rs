@@ -25,6 +25,7 @@ use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
+use crate::tools::tool_dispatch_trace::record_tool_call_event;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
 
@@ -110,8 +111,39 @@ impl ToolCallRuntime {
             );
         }
         let router = &self.step_context.tool_router;
+        router.record_catalog_if_needed(&crate::tools::context::ToolInvocation {
+            session: Arc::clone(&self.session),
+            turn: Arc::clone(&self.step_context.turn),
+            step_context: Arc::clone(&self.step_context),
+            cancellation_token: cancellation_token.clone(),
+            tracker: Arc::clone(&self.tracker),
+            call_id: call.call_id.clone(),
+            tool_name: call.tool_name.clone(),
+            source: source.clone(),
+            payload: call.payload.clone(),
+        });
         let supports_parallel = router.tool_supports_parallel(&call);
         let tool_runtime = router.tool_runtime(&call);
+        record_tool_call_event(
+            self.session.as_ref(),
+            self.step_context.as_ref(),
+            &call,
+            "tool_parallelism",
+            "decided",
+            Some(if supports_parallel {
+                "parallel"
+            } else {
+                "serialized"
+            }),
+            Some(if supports_parallel {
+                "runtime_allows_parallel"
+            } else {
+                "runtime_serializes"
+            }),
+            serde_json::json!({
+                "readiness": if tool_runtime.as_ref().and_then(|runtime| runtime.mcp_server_name()).is_some() { "mcp_server" } else { "none" },
+            }),
+        );
         let wait_for_runtime_cancellation = router.tool_waits_for_runtime_cancellation(&call);
         let router = Arc::clone(router);
         let session = Arc::clone(&self.session);
@@ -129,6 +161,7 @@ impl ToolCallRuntime {
         let abort_session = Arc::clone(&session);
         let abort_source = source.clone();
         let abort_turn = Arc::clone(&turn);
+        let abort_step_context = Arc::clone(&step_context);
         let terminal_outcome_reached = Arc::new(AtomicBool::new(false));
         let dispatch_terminal_outcome_reached = Arc::clone(&terminal_outcome_reached);
         let dispatch_call = call.clone();
@@ -205,6 +238,16 @@ impl ToolCallRuntime {
                             }
                         }
                         let response = Self::aborted_response(&call, secs);
+                        record_tool_call_event(
+                            abort_session.as_ref(),
+                            abort_step_context.as_ref(),
+                            &call,
+                            "tool_dispatch",
+                            "cancelled",
+                            Some("cancelled"),
+                            Some("cancellation_requested"),
+                            serde_json::json!({}),
+                        );
                         notify_tool_aborted(
                             abort_session.as_ref(),
                             abort_turn.as_ref(),
