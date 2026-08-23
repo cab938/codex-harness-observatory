@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Codex Harness Observatory</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="eyebrow">CODEX / LOCAL TRACE</div>
+        <h1>Harness Observatory</h1>
+      </div>
+      <div class="connection-pill" data-state="connecting" data-testid="connection-status">
+        <span class="status-light" aria-hidden="true"></span>
+        <span id="connection-label">Connecting</span>
+      </div>
+      <dl class="trace-meta" aria-label="Trace metadata">
+        <div><dt>Trace</dt><dd id="meta-trace" data-testid="meta-trace">-</dd></div>
+        <div><dt>Rollout</dt><dd id="meta-rollout">-</dd></div>
+        <div><dt>Root thread</dt><dd id="meta-root">-</dd></div>
+        <div><dt>Started</dt><dd id="meta-started">-</dd></div>
+        <div><dt>Format</dt><dd id="meta-format">-</dd></div>
+      </dl>
+    </header>
+
+    <main class="workspace">
+      <aside class="filter-panel" aria-labelledby="filter-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">SCOPE</p>
+            <h2 id="filter-title">Filters</h2>
+          </div>
+          <button class="text-button" type="button" id="reset-filters" data-testid="reset-filters">Reset</button>
+        </div>
+        <label class="field">
+          <span>Search metadata</span>
+          <input id="search-filter" data-testid="search-filter" type="search" placeholder="ID, event, outcome">
+        </label>
+        <label class="field">
+          <span>Raw packet type</span>
+          <select id="payload-filter" data-testid="payload-filter">
+            <option value="">All packet types</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Thread</span>
+          <select id="thread-filter" data-testid="thread-filter">
+            <option value="">All threads</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Turn</span>
+          <select id="turn-filter" data-testid="turn-filter">
+            <option value="">All turns</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Agent step</span>
+          <select id="step-filter" data-testid="step-filter">
+            <option value="">All steps</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Category</span>
+          <select id="category-filter" data-testid="category-filter">
+            <option value="">All categories</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Harness event</span>
+          <select id="name-filter" data-testid="name-filter">
+            <option value="">All event names</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Phase</span>
+          <select id="phase-filter" data-testid="phase-filter">
+            <option value="">All phases</option>
+          </select>
+        </label>
+        <div class="correlation-fields">
+          <label class="field">
+            <span>Correlation key</span>
+            <select id="correlation-key-filter" data-testid="correlation-key-filter">
+              <option value="">Any key</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Correlation value</span>
+            <input id="correlation-value-filter" data-testid="correlation-value-filter" type="search" placeholder="Exact or partial ID">
+          </label>
+        </div>
+        <label class="toggle-row">
+          <input id="harness-only-filter" data-testid="harness-only-filter" type="checkbox">
+          <span>Harness events only</span>
+        </label>
+      </aside>
+
+      <section class="timeline-panel" aria-labelledby="timeline-title">
+        <div class="panel-heading timeline-heading">
+          <div>
+            <p class="eyebrow">WRITER ORDER</p>
+            <h2 id="timeline-title">Event stream</h2>
+          </div>
+          <div class="timeline-tools">
+            <div class="stream-counts" aria-live="polite">
+              <strong id="matched-count" data-testid="matched-count">0</strong> shown
+              <span aria-hidden="true">/</span>
+              <span id="received-count" data-testid="received-count">0</span> received
+              <span id="buffered-count" data-testid="buffered-count" hidden></span>
+            </div>
+            <div class="stream-actions">
+              <button type="button" class="control-button" id="follow-live" data-testid="follow-live" aria-pressed="true">Follow: on</button>
+              <button type="button" class="control-button primary" id="pause-stream" data-testid="pause-stream" aria-pressed="false">Pause</button>
+            </div>
+          </div>
+        </div>
+        <div id="stream-notice" class="stream-notice" hidden role="status"></div>
+        <ol id="event-list" class="event-list" data-testid="event-list" aria-label="Trace events"></ol>
+        <div id="empty-state" class="empty-state">Waiting for the first event...</div>
+      </section>
+
+      <aside class="detail-panel" aria-labelledby="detail-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">SELECTED PACKET</p>
+            <h2 id="detail-title">Event detail</h2>
+          </div>
+        </div>
+        <div id="detail-empty" class="detail-empty">Select an event to inspect its redacted envelope and correlations.</div>
+        <pre id="event-detail" data-testid="event-detail" tabindex="0" hidden></pre>
+      </aside>
+    </main>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

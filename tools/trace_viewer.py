@@ -4,10 +4,15 @@
 import argparse
 import json
 import sys
+import threading
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator, Sequence
+from urllib.parse import parse_qs, urlparse
 
 
 OPENING_PHASES = {"requested", "started", "dispatched", "enqueued"}
@@ -30,6 +35,19 @@ SENSITIVE_DETAIL_KEYS = {
     "messages", "output", "path", "paths", "payload", "payloads", "prompt",
     "result", "results", "source", "text",
 }
+SENSITIVE_CORRELATION_KEYS = {
+    "argument", "command", "content", "file", "message", "output", "path",
+    "payload", "prompt", "result", "text",
+}
+RAW_SAFE_KEYS = {
+    "status", "model", "provider_name", "kind", "event_type", "trace_id",
+    "root_thread_id", "agent_path",
+}
+MANIFEST_SAFE_KEYS = {
+    "schema_version", "trace_id", "rollout_id", "root_thread_id",
+    "started_at_unix_ms", "raw_event_log", "payloads_dir",
+}
+WEB_ASSET_DIR = Path(__file__).with_name("trace_viewer_web")
 
 # The trace envelope intentionally accepts new string-valued event names.  The
 # checker therefore validates only pairs Core currently promises to emit, rather
@@ -137,6 +155,37 @@ def trace_path(input_path: str) -> Path:
     return path
 
 
+def parse_event_line(
+    line: str,
+    *,
+    source: Path,
+    line_number: int,
+    previous_seq: int | None,
+    enforce_sequence: bool,
+) -> dict[str, Any] | None:
+    if not line.strip():
+        return None
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError as error:
+        raise TraceInputError(
+            f"{source}:{line_number}: malformed JSONL: {error.msg}"
+        ) from error
+    if not isinstance(event, dict):
+        raise TraceInputError(f"{source}:{line_number}: raw event must be a JSON object")
+    seq = event.get("seq")
+    if not isinstance(seq, int):
+        raise TraceInputError(f"{source}:{line_number}: raw event has no integer seq")
+    if enforce_sequence and previous_seq is not None and seq <= previous_seq:
+        raise TraceInputError(
+            f"{source}:{line_number}: seq {seq} is not after prior seq {previous_seq}"
+        )
+    payload = event.get("payload")
+    if not isinstance(payload, dict) or not isinstance(payload.get("type"), str):
+        raise TraceInputError(f"{source}:{line_number}: raw event has no typed payload")
+    return event
+
+
 def events(path: Path, *, enforce_sequence: bool = True) -> Iterator[dict[str, Any]]:
     previous_seq: int | None = None
     try:
@@ -145,27 +194,16 @@ def events(path: Path, *, enforce_sequence: bool = True) -> Iterator[dict[str, A
         raise TraceInputError(f"cannot open {path}: {error}") from error
     with stream:
         for line_number, line in enumerate(stream, 1):
-            if not line.strip():
+            event = parse_event_line(
+                line,
+                source=path,
+                line_number=line_number,
+                previous_seq=previous_seq,
+                enforce_sequence=enforce_sequence,
+            )
+            if event is None:
                 continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError as error:
-                raise TraceInputError(
-                    f"{path}:{line_number}: malformed JSONL: {error.msg}"
-                ) from error
-            if not isinstance(event, dict):
-                raise TraceInputError(f"{path}:{line_number}: raw event must be a JSON object")
-            seq = event.get("seq")
-            if not isinstance(seq, int):
-                raise TraceInputError(f"{path}:{line_number}: raw event has no integer seq")
-            if enforce_sequence and previous_seq is not None and seq <= previous_seq:
-                raise TraceInputError(
-                    f"{path}:{line_number}: seq {seq} is not after prior seq {previous_seq}"
-                )
-            previous_seq = seq
-            payload = event.get("payload")
-            if not isinstance(payload, dict) or not isinstance(payload.get("type"), str):
-                raise TraceInputError(f"{path}:{line_number}: raw event has no typed payload")
+            previous_seq = event["seq"]
             yield event
 
 
@@ -386,6 +424,17 @@ def safe_detail(value: Any, key: str = "") -> Any:
     return value
 
 
+def safe_correlations(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): "<redacted>"
+        if str(key).lower() in SENSITIVE_CORRELATION_KEYS
+        else safe_detail(child, "correlation_value")
+        for key, child in value.items()
+    }
+
+
 def compact_value(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -412,9 +461,8 @@ def harness_line(event: dict[str, Any], item: dict[str, Any], details: bool) -> 
 def raw_line(event: dict[str, Any]) -> str:
     payload = event["payload"]
     fields = [payload["type"]]
-    safe_keys = {"status", "model", "provider_name", "kind", "event_type", "trace_id", "root_thread_id"}
     for key in sorted(payload):
-        if key in safe_keys or key.endswith("_id"):
+        if key in RAW_SAFE_KEYS or key.endswith("_id"):
             value = payload[key]
             if isinstance(value, (str, int, float, bool)):
                 fields.append(f"{key}={value}")
@@ -422,6 +470,347 @@ def raw_line(event: dict[str, Any]) -> str:
         if value is not None:
             fields.append(f"{label}={value}")
     return " ".join(fields)
+
+
+def safe_reference_path(value: str) -> str:
+    candidate = Path(value)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return candidate.name
+    return candidate.as_posix()
+
+
+def payload_references(value: Any, field: str = "payload") -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = []
+
+    def collect(item: Any, parent: str) -> None:
+        if isinstance(item, dict):
+            path = item.get("path")
+            looks_like_reference = isinstance(path, str) and (
+                parent.endswith("payload")
+                or parent.endswith("payloads")
+                or "raw_payload_id" in item
+                or "kind" in item
+            )
+            if looks_like_reference:
+                reference: dict[str, Any] = {
+                    "field": parent,
+                    "path": safe_reference_path(path),
+                }
+                raw_payload_id = item.get("raw_payload_id")
+                if isinstance(raw_payload_id, str):
+                    reference["raw_payload_id"] = raw_payload_id[:120]
+                kind = item.get("kind")
+                if isinstance(kind, (str, int, float, bool, dict)):
+                    reference["kind"] = safe_detail(kind, "kind")
+                references.append(reference)
+                return
+            for key, child in item.items():
+                collect(child, str(key))
+        elif isinstance(item, list):
+            for child in item:
+                collect(child, parent)
+
+    collect(value, field)
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for reference in references:
+        identity = compact_value(reference)
+        if identity not in seen:
+            seen.add(identity)
+            unique.append(reference)
+    return unique
+
+
+def viewer_event(event: dict[str, Any]) -> dict[str, Any]:
+    payload = event["payload"]
+    item = harness(event)
+    payload_metadata: dict[str, Any] = {}
+    for key, value in payload.items():
+        if (key in RAW_SAFE_KEYS or key.endswith("_id")) and isinstance(
+            value, (str, int, float, bool)
+        ):
+            payload_metadata[key] = safe_detail(value, key)
+    safe_event: dict[str, Any] = {
+        "schema_version": event.get("schema_version"),
+        "seq": event["seq"],
+        "wall_time_unix_ms": event.get("wall_time_unix_ms"),
+        "rollout_id": event.get("rollout_id"),
+        "thread_id": event.get("thread_id"),
+        "codex_turn_id": event.get("codex_turn_id"),
+        "payload_type": payload["type"],
+        "payload_metadata": payload_metadata,
+        "payload_references": payload_references(payload),
+    }
+    if item is not None:
+        safe_event["harness"] = {
+            "category": item.get("category"),
+            "name": item.get("name"),
+            "phase": item.get("phase"),
+            "step_id": item.get("step_id"),
+            "outcome": item.get("outcome"),
+            "reason": item.get("reason"),
+            "correlations": safe_correlations(item.get("correlations")),
+            "details": safe_detail(item.get("details")),
+        }
+    return safe_event
+
+
+def manifest_metadata(path: Path) -> dict[str, Any]:
+    manifest_path = path.parent / "manifest.json"
+    manifest: dict[str, Any] = {}
+    if manifest_path.is_file():
+        try:
+            parsed = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise TraceInputError(f"cannot read bundle manifest: {error}") from error
+        if not isinstance(parsed, dict):
+            raise TraceInputError("bundle manifest must be a JSON object")
+        for key in MANIFEST_SAFE_KEYS:
+            value = parsed.get(key)
+            if isinstance(value, (str, int, float, bool)):
+                manifest[key] = value
+        if "schema_version" in manifest:
+            manifest["manifest_schema_version"] = manifest["schema_version"]
+    try:
+        first_event = next(events(path), None)
+    except TraceInputError:
+        first_event = None
+    if first_event is not None:
+        if not manifest:
+            manifest = {
+                "schema_version": first_event.get("schema_version"),
+                "rollout_id": first_event.get("rollout_id"),
+                "root_thread_id": first_event.get("thread_id"),
+                "started_at_unix_ms": first_event.get("wall_time_unix_ms"),
+                "raw_event_log": path.name,
+                "raw_schema_version": first_event.get("schema_version"),
+            }
+            payload = first_event["payload"]
+            if payload.get("type") == "rollout_started":
+                manifest["trace_id"] = payload.get("trace_id")
+                manifest["root_thread_id"] = payload.get("root_thread_id")
+        else:
+            manifest["raw_schema_version"] = first_event.get("schema_version")
+    for key in ("raw_event_log", "payloads_dir"):
+        if isinstance(manifest.get(key), str):
+            manifest[key] = safe_reference_path(manifest[key])
+    manifest["source_name"] = path.parent.name if path.name == "trace.jsonl" else path.name
+    manifest["stream_mode"] = "append_only_jsonl"
+    return manifest
+
+
+def safe_stream_error(error: Exception, path: Path) -> str:
+    return str(error).replace(str(path), path.name)[:240]
+
+
+def tail_updates(
+    path: Path,
+    *,
+    after_seq: int = 0,
+    follow: bool = True,
+    poll_interval: float = 0.15,
+    stop_event: threading.Event | None = None,
+) -> Iterator[dict[str, Any]]:
+    position = 0
+    buffered = b""
+    line_number = 0
+    previous_seq: int | None = None
+    last_heartbeat = time.monotonic()
+    while stop_event is None or not stop_event.is_set():
+        try:
+            size = path.stat().st_size
+            if size < position:
+                yield {"kind": "error", "message": "trace.jsonl was truncated while viewing"}
+                return
+            if size > position:
+                with path.open("rb") as stream:
+                    stream.seek(position)
+                    chunk = stream.read(size - position)
+                position += len(chunk)
+                buffered += chunk
+                while b"\n" in buffered:
+                    encoded_line, buffered = buffered.split(b"\n", 1)
+                    line_number += 1
+                    try:
+                        line = encoded_line.decode("utf-8")
+                    except UnicodeDecodeError as error:
+                        yield {
+                            "kind": "error",
+                            "message": f"line {line_number}: invalid UTF-8: {error.reason}",
+                        }
+                        return
+                    try:
+                        event = parse_event_line(
+                            line,
+                            source=path,
+                            line_number=line_number,
+                            previous_seq=previous_seq,
+                            enforce_sequence=True,
+                        )
+                    except TraceInputError as error:
+                        yield {"kind": "error", "message": safe_stream_error(error, path)}
+                        return
+                    if event is None:
+                        continue
+                    previous_seq = event["seq"]
+                    if event["seq"] > after_seq:
+                        yield {"kind": "event", "event": viewer_event(event)}
+                    last_heartbeat = time.monotonic()
+                continue
+        except OSError as error:
+            yield {
+                "kind": "error",
+                "message": f"cannot tail trace.jsonl: {error.strerror or 'read failed'}",
+            }
+            return
+        if not follow:
+            return
+        if time.monotonic() - last_heartbeat >= 10:
+            yield {"kind": "heartbeat"}
+            last_heartbeat = time.monotonic()
+        if stop_event is not None:
+            stop_event.wait(poll_interval)
+        else:
+            time.sleep(poll_interval)
+
+
+class TraceViewerHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, address: tuple[str, int], trace: Path):
+        self.trace_path = trace
+        self.stop_event = threading.Event()
+        super().__init__(address, TraceViewerRequestHandler)
+
+    def server_close(self) -> None:
+        self.stop_event.set()
+        super().server_close()
+
+
+class TraceViewerRequestHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    @property
+    def viewer_server(self) -> TraceViewerHTTPServer:
+        return self.server  # type: ignore[return-value]
+
+    def log_message(self, format_string: str, *args: Any) -> None:
+        return
+
+    def send_common_headers(self, content_type: str, length: int | None = None) -> None:
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "connect-src 'self'; img-src 'self' data:; object-src 'none'; "
+            "base-uri 'none'; frame-ancestors 'none'",
+        )
+        if length is not None:
+            self.send_header("Content-Length", str(length))
+
+    def send_bytes(self, body: bytes, content_type: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+        self.send_response(status)
+        self.send_common_headers(content_type, len(body))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_json(self, value: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
+        body = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        self.send_bytes(body, "application/json; charset=utf-8", status)
+
+    def serve_asset(self, name: str, content_type: str) -> None:
+        path = WEB_ASSET_DIR / name
+        try:
+            body = path.read_bytes()
+        except OSError as error:
+            self.send_json(
+                {"error": f"viewer asset unavailable: {error.strerror or 'read failed'}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+        self.send_bytes(body, content_type)
+
+    def stream_events(self, query: dict[str, list[str]]) -> None:
+        requested_after = query.get("after", [self.headers.get("Last-Event-ID", "0")])[0]
+        try:
+            after_seq = int(requested_after or "0")
+        except ValueError:
+            self.send_json({"error": "after must be an integer sequence"}, HTTPStatus.BAD_REQUEST)
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_common_headers("text/event-stream; charset=utf-8")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        try:
+            for update in tail_updates(
+                self.viewer_server.trace_path,
+                after_seq=after_seq,
+                stop_event=self.viewer_server.stop_event,
+            ):
+                kind = update["kind"]
+                if kind == "heartbeat":
+                    packet = b": heartbeat\n\n"
+                else:
+                    data = json.dumps(update, separators=(",", ":"), ensure_ascii=True)
+                    if kind == "event":
+                        seq = update["event"]["seq"]
+                        packet = f"id: {seq}\nevent: trace\ndata: {data}\n\n".encode("utf-8")
+                    else:
+                        packet = f"event: trace-error\ndata: {data}\n\n".encode("utf-8")
+                self.wfile.write(packet)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/":
+            self.serve_asset("index.html", "text/html; charset=utf-8")
+        elif parsed.path == "/assets/app.js":
+            self.serve_asset("app.js", "text/javascript; charset=utf-8")
+        elif parsed.path == "/assets/styles.css":
+            self.serve_asset("styles.css", "text/css; charset=utf-8")
+        elif parsed.path == "/favicon.ico":
+            self.send_bytes(b"", "image/x-icon", HTTPStatus.NO_CONTENT)
+        elif parsed.path == "/api/header":
+            try:
+                self.send_json(manifest_metadata(self.viewer_server.trace_path))
+            except TraceInputError as error:
+                self.send_json(
+                    {"error": safe_stream_error(error, self.viewer_server.trace_path.parent)},
+                    HTTPStatus.UNPROCESSABLE_ENTITY,
+                )
+        elif parsed.path == "/api/stream":
+            self.stream_events(parse_qs(parsed.query))
+        else:
+            self.send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+
+def make_viewer_server(path: Path, host: str, port: int) -> TraceViewerHTTPServer:
+    try:
+        return TraceViewerHTTPServer((host, port), path)
+    except OSError as error:
+        raise TraceInputError(f"cannot bind viewer at {host}:{port}: {error}") from error
+
+
+def serve_viewer(path: Path, host: str, port: int) -> int:
+    server = make_viewer_server(path, host, port)
+    bound_host, bound_port = server.server_address[:2]
+    display_host = "127.0.0.1" if bound_host in {"0.0.0.0", "::"} else bound_host
+    print(f"Codex Harness Observatory: http://{display_host}:{bound_port}", flush=True)
+    if bound_host not in {"127.0.0.1", "localhost", "::1"}:
+        print("trace-viewer: warning: viewer is not bound exclusively to loopback", file=sys.stderr)
+    try:
+        server.serve_forever(poll_interval=0.2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
 
 
 def timeline(event_stream: Iterator[dict[str, Any]], filters: Filters, details: bool) -> int:
@@ -522,17 +911,38 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="validate known lifecycle, step, correlation, and sequence invariants",
     )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="serve the unified live viewer and tail appended events",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="viewer bind host (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="viewer port, or 0 to choose an available port (default: 8765)",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if not 0 <= args.port <= 65535:
+        print("trace-viewer: error: port must be between 0 and 65535", file=sys.stderr)
+        return 2
     filters = Filters(
         set(args.payload_type), set(args.thread), set(args.turn), set(args.step),
         set(args.category), set(args.name), set(args.phase), tuple(args.correlation), args.harness_only,
     )
     try:
         path = trace_path(args.input)
+        if args.serve:
+            return serve_viewer(path, args.host, args.port)
         if args.check:
             return check(events(path, enforce_sequence=False))
         matched = summary(events(path), filters) if args.summary else timeline(events(path), filters, args.details)
