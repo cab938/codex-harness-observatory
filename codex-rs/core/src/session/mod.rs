@@ -141,6 +141,12 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_rollout_trace::AgentResultTracePayload;
+use codex_rollout_trace::HARNESS_CATEGORY_CONTEXT;
+use codex_rollout_trace::HARNESS_PHASE_CANCELLED;
+use codex_rollout_trace::HARNESS_PHASE_COMPLETED;
+use codex_rollout_trace::HARNESS_PHASE_FAILED;
+use codex_rollout_trace::HARNESS_PHASE_STARTED;
+use codex_rollout_trace::HarnessTraceEvent;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
 use codex_rollout_trace::ThreadTraceContext;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles;
@@ -3150,113 +3156,165 @@ impl Session {
         cancellation_token: &CancellationToken,
         required_servers: &[String],
     ) -> CodexResult<Arc<StepContext>> {
-        // Keep selections fixed for the turn while allowing their startup work to finish.
-        let environments = turn_context.environments.refresh_readiness();
-        self.services
-            .agents_md_manager
-            .refresh(
-                &turn_context.config,
-                &environments,
-                turn_context.windows_sandbox_level,
-            )
-            .await?;
-        let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;
-        let selected_capability_roots = self
-            .resolve_selected_capability_roots_for_step(&environments)
-            .await;
-        let ready_selected_capability_roots =
-            Self::ready_selected_capability_roots(&selected_capability_roots);
-        let executor_capability_discovery = self
-            .executor_capability_discovery_for_step(
-                &turn_context.config,
-                &ready_selected_capability_roots,
-                &environments,
-                turn_context.windows_sandbox_level,
-            )
-            .or_cancel(cancellation_token)
-            .await?;
-        let extension_data = codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());
-        extension_data.insert(selected_capability_roots.clone());
-        if let Some(discovery) = &executor_capability_discovery {
-            extension_data.insert(discovery.as_ref().clone());
-            if !discovery.sandbox_contexts().is_empty() {
-                extension_data.insert(discovery.sandbox_contexts().clone());
-            }
-        } else if !environments
-            .permission_profile_or_else(|| turn_context.permission_profile())
-            .file_system_sandbox_policy()
-            .has_full_disk_read_access()
-        {
-            let sandbox_contexts = environments
-                .turn_environments()
-                .map(|environment| {
-                    (
-                        environment.selection.environment_id.clone(),
-                        turn_context.file_system_sandbox_context(
-                            /*additional_permissions*/ None,
-                            environment,
-                        ),
-                    )
-                })
-                .collect::<HashMap<_, _>>();
-            extension_data.insert(sandbox_contexts);
-        }
-        let (mcp, prepared_recommendations) = async {
-            tokio::join!(
-                self.mcp_runtime_for_step(
-                    turn_context.as_ref(),
-                    &selected_capability_roots,
-                    required_servers,
-                ),
-                turn::prepare_tool_recommendations(self.as_ref(), turn_context.as_ref()),
-            )
-        }
-        .or_cancel(cancellation_token)
-        .await?;
-        let mut selected_plugins = self
-            .services
-            .thread_extension_data
-            .get::<codex_extension_api::SelectedPluginSnapshot>()
-            .map(|snapshot| snapshot.as_ref().clone())
-            .unwrap_or_default();
-        selected_plugins.plugins.retain(|plugin| {
-            ready_selected_capability_roots
-                .iter()
-                .any(|root| root.id == plugin.selected_root_id)
-        });
-        extension_data.insert(selected_plugins.clone());
-        turn_context.extension_data.insert(selected_plugins);
-        let tool_router = turn::built_tools(
-            self.as_ref(),
-            turn_context.as_ref(),
-            &environments,
-            &mcp,
-            &extension_data,
-            prepared_recommendations,
-        )
-        .or_cancel(cancellation_token)
-        .await??;
         let trace_step_id = self
             .services
             .rollout_thread_trace
             .next_step_id(&turn_context.sub_id);
-        Ok(Arc::new(StepContext {
-            model_info: Arc::clone(&turn_context.model_info),
-            reasoning_effort: turn_context.reasoning_effort.clone(),
-            reasoning_summary: turn_context.reasoning_summary,
-            service_tier: turn_context.config.service_tier.clone(),
-            approval_policy: turn_context.approval_policy(),
-            approvals_reviewer: turn_context.config.approvals_reviewer,
-            session_telemetry: turn_context.session_telemetry.clone(),
-            turn: turn_context,
-            trace_step_id,
-            environments,
-            selected_capability_roots,
-            executor_capability_discovery,
-            mcp,
-            tool_router,
-            loaded_agents_md,
-        }))
+        self.services.rollout_thread_trace.record_harness_event(
+            turn_context.sub_id.clone(),
+            HarnessTraceEvent::new(
+                HARNESS_CATEGORY_CONTEXT,
+                "step_context_capture",
+                HARNESS_PHASE_STARTED,
+            )
+            .with_optional_step_id(trace_step_id.clone())
+            .with_details(serde_json::json!({
+                "required_mcp_server_count": required_servers.len(),
+            })),
+        );
+
+        let result: CodexResult<Arc<StepContext>> = async {
+            // Keep selections fixed for the turn while allowing their startup work to finish.
+            let environments = turn_context.environments.refresh_readiness();
+            self.services
+                .agents_md_manager
+                .refresh(
+                    &turn_context.config,
+                    &environments,
+                    turn_context.windows_sandbox_level,
+                )
+                .await?;
+            let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;
+            let selected_capability_roots = self
+                .resolve_selected_capability_roots_for_step(&environments)
+                .await;
+            let ready_selected_capability_roots =
+                Self::ready_selected_capability_roots(&selected_capability_roots);
+            let executor_capability_discovery = self
+                .executor_capability_discovery_for_step(
+                    &turn_context.config,
+                    &ready_selected_capability_roots,
+                    &environments,
+                    turn_context.windows_sandbox_level,
+                )
+                .or_cancel(cancellation_token)
+                .await?;
+            let extension_data =
+                codex_extension_api::ExtensionData::new(turn_context.sub_id.clone());
+            extension_data.insert(selected_capability_roots.clone());
+            if let Some(discovery) = &executor_capability_discovery {
+                extension_data.insert(discovery.as_ref().clone());
+                if !discovery.sandbox_contexts().is_empty() {
+                    extension_data.insert(discovery.sandbox_contexts().clone());
+                }
+            } else if !environments
+                .permission_profile_or_else(|| turn_context.permission_profile())
+                .file_system_sandbox_policy()
+                .has_full_disk_read_access()
+            {
+                let sandbox_contexts = environments
+                    .turn_environments()
+                    .map(|environment| {
+                        (
+                            environment.selection.environment_id.clone(),
+                            turn_context.file_system_sandbox_context(
+                                /*additional_permissions*/ None,
+                                environment,
+                            ),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                extension_data.insert(sandbox_contexts);
+            }
+            let (mcp, prepared_recommendations) = async {
+                tokio::join!(
+                    self.mcp_runtime_for_step(
+                        turn_context.as_ref(),
+                        &selected_capability_roots,
+                        required_servers,
+                    ),
+                    turn::prepare_tool_recommendations(self.as_ref(), turn_context.as_ref()),
+                )
+            }
+            .or_cancel(cancellation_token)
+            .await?;
+            let mut selected_plugins = self
+                .services
+                .thread_extension_data
+                .get::<codex_extension_api::SelectedPluginSnapshot>()
+                .map(|snapshot| snapshot.as_ref().clone())
+                .unwrap_or_default();
+            selected_plugins.plugins.retain(|plugin| {
+                ready_selected_capability_roots
+                    .iter()
+                    .any(|root| root.id == plugin.selected_root_id)
+            });
+            extension_data.insert(selected_plugins.clone());
+            turn_context.extension_data.insert(selected_plugins);
+            let tool_router = turn::built_tools(
+                self.as_ref(),
+                turn_context.as_ref(),
+                &environments,
+                &mcp,
+                &extension_data,
+                prepared_recommendations,
+            )
+            .or_cancel(cancellation_token)
+            .await??;
+            Ok(Arc::new(StepContext {
+                model_info: Arc::clone(&turn_context.model_info),
+                reasoning_effort: turn_context.reasoning_effort.clone(),
+                reasoning_summary: turn_context.reasoning_summary,
+                service_tier: turn_context.config.service_tier.clone(),
+                approval_policy: turn_context.approval_policy(),
+                approvals_reviewer: turn_context.config.approvals_reviewer,
+                session_telemetry: turn_context.session_telemetry.clone(),
+                turn: Arc::clone(&turn_context),
+                trace_step_id: trace_step_id.clone(),
+                environments,
+                selected_capability_roots,
+                executor_capability_discovery,
+                mcp,
+                tool_router,
+                loaded_agents_md,
+            }))
+        }
+        .await;
+
+        let event = match &result {
+            Ok(step_context) => HarnessTraceEvent::new(
+                HARNESS_CATEGORY_CONTEXT,
+                "step_context_capture",
+                HARNESS_PHASE_COMPLETED,
+            )
+            .with_optional_step_id(step_context.trace_step_id.clone())
+            .with_details(serde_json::json!({
+                "environment_count": step_context.environments.turn_environments().count(),
+                "selected_capability_root_count": step_context.selected_capability_roots.len(),
+                "tool_count": step_context.tool_router.model_visible_specs().len(),
+            })),
+            Err(error) => HarnessTraceEvent::new(
+                HARNESS_CATEGORY_CONTEXT,
+                "step_context_capture",
+                if matches!(error.details(), CodexErrorDetails::TurnAborted) {
+                    HARNESS_PHASE_CANCELLED
+                } else {
+                    HARNESS_PHASE_FAILED
+                },
+            )
+            .with_optional_step_id(trace_step_id)
+            .with_reason(
+                if matches!(error.details(), CodexErrorDetails::TurnAborted) {
+                    "turn_aborted"
+                } else {
+                    "capture_failed"
+                },
+            ),
+        };
+        self.services
+            .rollout_thread_trace
+            .record_harness_event(turn_context.sub_id.clone(), event);
+        result
     }
 
     pub(crate) async fn record_inter_agent_communication(
@@ -3459,6 +3517,28 @@ impl Session {
         }
     }
 
+    fn record_context_contribution(
+        &self,
+        turn_context: &TurnContext,
+        step_context: Option<&StepContext>,
+        source: &'static str,
+        outcome: &'static str,
+        details: Value,
+    ) {
+        self.services.rollout_thread_trace.record_harness_event(
+            turn_context.sub_id.clone(),
+            HarnessTraceEvent::new(
+                HARNESS_CATEGORY_CONTEXT,
+                "context_contribution",
+                HARNESS_PHASE_COMPLETED,
+            )
+            .with_optional_step_id(step_context.and_then(|step| step.trace_step_id.clone()))
+            .with_outcome(outcome)
+            .with_correlation("source", source)
+            .with_details(details),
+        );
+    }
+
     async fn build_turn_context_contribution_items(
         &self,
         step_context: &StepContext,
@@ -3508,13 +3588,55 @@ impl Session {
         {
             items.push(contextual_user_message);
         }
+        self.record_context_contribution(
+            turn_context,
+            Some(step_context),
+            "turn_extensions",
+            if items.is_empty() {
+                "omitted"
+            } else {
+                "refreshed"
+            },
+            serde_json::json!({
+                "contributor_count": context_contributors.len(),
+                "item_count": items.len(),
+            }),
+        );
         items
     }
 
+    #[cfg(test)]
     pub(crate) async fn build_initial_context_with_world_state(
         &self,
         turn_context: &TurnContext,
         world_state: &WorldState,
+    ) -> Vec<ResponseItem> {
+        self.build_initial_context_with_world_state_for_step_context(
+            turn_context,
+            world_state,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn build_initial_context_with_world_state_for_step(
+        &self,
+        step_context: &StepContext,
+        world_state: &WorldState,
+    ) -> Vec<ResponseItem> {
+        self.build_initial_context_with_world_state_for_step_context(
+            step_context.turn.as_ref(),
+            world_state,
+            Some(step_context),
+        )
+        .await
+    }
+
+    async fn build_initial_context_with_world_state_for_step_context(
+        &self,
+        turn_context: &TurnContext,
+        world_state: &WorldState,
+        step_context: Option<&StepContext>,
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
         let mut contextual_user_sections = Vec::<String>::with_capacity(2);
@@ -3528,6 +3650,7 @@ impl Session {
         };
         let separate_guardian_developer_message =
             crate::guardian::is_guardian_reviewer_source(&session_source);
+        let mut developer_instructions_included = false;
         // Keep the guardian policy prompt out of the aggregated developer bundle so it
         // stays isolated as its own top-level developer message for guardian subagents.
         if !separate_guardian_developer_message
@@ -3535,6 +3658,7 @@ impl Session {
             && !developer_instructions.is_empty()
         {
             developer_sections.push(developer_instructions.to_string());
+            developer_instructions_included = true;
         }
         let loaded_plugins = self
             .services
@@ -3562,21 +3686,25 @@ impl Session {
         } else {
             None
         };
+        let mut recommended_plugins_included = false;
         if let Some(recommended_plugins) = recommended_plugin_candidates
             .as_deref()
             .and_then(RecommendedPluginsInstructions::from_plugins)
         {
             contextual_user_sections.push(recommended_plugins.render());
+            recommended_plugins_included = true;
         }
         let context_contributors = self.services.extensions.context_contributors().to_vec();
+        let mut thread_extension_fragment_count = 0;
         for contributor in &context_contributors {
-            for fragment in contributor
+            let fragments = contributor
                 .contribute_thread_context(
                     &self.services.session_extension_data,
                     &self.services.thread_extension_data,
                 )
-                .await
-            {
+                .await;
+            thread_extension_fragment_count += fragments.len();
+            for fragment in fragments {
                 push_prompt_fragment(
                     fragment,
                     &mut developer_sections,
@@ -3585,8 +3713,9 @@ impl Session {
                 );
             }
         }
+        let mut turn_extension_fragment_count = 0;
         for contributor in &context_contributors {
-            for fragment in contributor
+            let fragments = contributor
                 .contribute_turn_context(TurnContextContributionInput {
                     thread_id: self.thread_id(),
                     turn_id: turn_context.sub_id.as_str(),
@@ -3595,8 +3724,9 @@ impl Session {
                     turn_store: turn_context.extension_data.as_ref(),
                     model_context_window: turn_context.model_context_window(),
                 })
-                .await
-            {
+                .await;
+            turn_extension_fragment_count += fragments.len();
+            for fragment in fragments {
                 push_prompt_fragment(
                     fragment,
                     &mut developer_sections,
@@ -3605,6 +3735,7 @@ impl Session {
                 );
             }
         }
+        let mut token_budget_context_included = false;
         // This is full-context metadata. Steady-state context diffs should not re-emit it.
         if turn_context.config.features.enabled(Feature::TokenBudget)
             && turn_context.model_context_window().is_some()
@@ -3648,9 +3779,12 @@ impl Session {
                 )
                 .render(),
             );
+            token_budget_context_included = true;
         }
         // Render the active mode after the usage hint so it can override that hint.
         let mut initial_multi_agent_mode = None;
+        let mut world_state_developer_fragment_count = 0;
+        let mut world_state_user_fragment_count = 0;
         for fragment in world_state.render_full() {
             match fragment.role() {
                 "developer"
@@ -3658,22 +3792,32 @@ impl Session {
                 {
                     // New-model instructions must precede the rest of the developer context.
                     developer_sections.insert(0, fragment.render());
+                    world_state_developer_fragment_count += 1;
                 }
                 "developer" if fragment.markers().0 == MULTI_AGENT_MODE_OPEN_TAG => {
                     initial_multi_agent_mode = Some(fragment);
+                    world_state_developer_fragment_count += 1;
                 }
                 "developer"
                     if fragment.markers().0 == MultiAgentRoleInstructions::type_markers().0 =>
                 {
                     separate_developer_sections.push(fragment.render());
+                    world_state_developer_fragment_count += 1;
                 }
                 "developer"
                     if fragment.requires_separate_message() && fragment.markers().0.is_empty() =>
                 {
                     separate_developer_sections.push(fragment.render());
+                    world_state_developer_fragment_count += 1;
                 }
-                "developer" => developer_sections.push(fragment.render()),
-                "user" => contextual_user_sections.push(fragment.render()),
+                "developer" => {
+                    developer_sections.push(fragment.render());
+                    world_state_developer_fragment_count += 1;
+                }
+                "user" => {
+                    contextual_user_sections.push(fragment.render());
+                    world_state_user_fragment_count += 1;
+                }
                 _ => {}
             }
         }
@@ -3710,11 +3854,87 @@ impl Session {
                 ])
         {
             items.push(guardian_developer_message);
+            developer_instructions_included = true;
         }
         // New context windows and compaction install these items directly into replacement history.
         for item in &mut items {
             item.set_turn_id_if_missing(&turn_context.sub_id);
         }
+        self.record_context_contribution(
+            turn_context,
+            step_context,
+            "developer_instructions",
+            if developer_instructions_included {
+                "included"
+            } else {
+                "omitted"
+            },
+            serde_json::json!({ "separate_message": separate_guardian_developer_message }),
+        );
+        self.record_context_contribution(
+            turn_context,
+            step_context,
+            "recommended_plugins",
+            if recommended_plugins_included {
+                "included"
+            } else {
+                "omitted"
+            },
+            serde_json::json!({}),
+        );
+        self.record_context_contribution(
+            turn_context,
+            step_context,
+            "thread_extensions",
+            if thread_extension_fragment_count > 0 {
+                "included"
+            } else {
+                "omitted"
+            },
+            serde_json::json!({
+                "contributor_count": context_contributors.len(),
+                "fragment_count": thread_extension_fragment_count,
+            }),
+        );
+        self.record_context_contribution(
+            turn_context,
+            step_context,
+            "turn_extensions",
+            if turn_extension_fragment_count > 0 {
+                "included"
+            } else {
+                "omitted"
+            },
+            serde_json::json!({
+                "contributor_count": context_contributors.len(),
+                "fragment_count": turn_extension_fragment_count,
+            }),
+        );
+        self.record_context_contribution(
+            turn_context,
+            step_context,
+            "token_budget_context",
+            if token_budget_context_included {
+                "included"
+            } else {
+                "omitted"
+            },
+            serde_json::json!({}),
+        );
+        self.record_context_contribution(
+            turn_context,
+            step_context,
+            "world_state",
+            if world_state_developer_fragment_count + world_state_user_fragment_count > 0 {
+                "included"
+            } else {
+                "omitted"
+            },
+            serde_json::json!({
+                "developer_fragment_count": world_state_developer_fragment_count,
+                "user_fragment_count": world_state_user_fragment_count,
+            }),
+        );
         items
     }
 
@@ -3790,7 +4010,7 @@ impl Session {
         };
         let (window_number, window_ids) = window;
         let context_items = self
-            .build_initial_context_with_world_state(turn_context, world_state.as_ref())
+            .build_initial_context_with_world_state_for_step(step_context, world_state.as_ref())
             .await
             .into_iter()
             .map(ResponseItemEnvelope::new)
@@ -3847,7 +4067,7 @@ impl Session {
         // Full initial context resets the baseline; later turns persist only its changes.
         let (mut context_items, world_state_item) = if should_inject_full_context {
             let context_items = self
-                .build_initial_context_with_world_state(turn_context, world_state.as_ref())
+                .build_initial_context_with_world_state_for_step(step_context, world_state.as_ref())
                 .await;
             let snapshot = world_state.snapshot();
             self.state
@@ -3871,6 +4091,22 @@ impl Session {
             };
             (world_state_items, world_state_item)
         };
+        if !should_inject_full_context {
+            self.record_context_contribution(
+                turn_context,
+                Some(step_context),
+                "world_state",
+                if context_items.is_empty() {
+                    "unchanged"
+                } else {
+                    "refreshed"
+                },
+                serde_json::json!({
+                    "item_count": context_items.len(),
+                    "has_persisted_patch": world_state_item.is_some(),
+                }),
+            );
+        }
         if !should_inject_full_context && turn_context_changed {
             context_items.extend(
                 self.build_turn_context_contribution_items(step_context)
