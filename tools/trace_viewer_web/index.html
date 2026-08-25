@@ -38,12 +38,13 @@
           <span>Search</span>
           <input id="search-filter" data-testid="search-filter" type="search" placeholder="ID, event, outcome">
         </label>
-        <label class="field">
-          <span>Category</span>
-          <select id="category-filter" data-testid="category-filter">
-            <option value="">All categories</option>
-          </select>
-        </label>
+        <div class="field category-field">
+          <span id="category-filter-label">Category</span>
+          <details id="category-filter" class="category-filter" data-testid="category-filter" aria-labelledby="category-filter-label">
+            <summary id="category-filter-summary">All categories</summary>
+            <div id="category-options" class="category-options" role="group" aria-labelledby="category-filter-label"></div>
+          </details>
+        </div>
         <label class="field">
           <span>Event or tool</span>
           <select id="name-filter" data-testid="name-filter">

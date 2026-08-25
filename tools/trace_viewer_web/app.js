@@ -9,6 +9,7 @@ const state = {
   waitingForTrace: false,
   renderQueued: false,
   artifactRequest: 0,
+  selectedCategories: new Set(),
   tools: new Map(),
   options: {
     payloadTypes: new Set(),
@@ -36,6 +37,8 @@ const elements = {
   turn: document.querySelector('#turn-filter'),
   step: document.querySelector('#step-filter'),
   category: document.querySelector('#category-filter'),
+  categorySummary: document.querySelector('#category-filter-summary'),
+  categoryOptions: document.querySelector('#category-options'),
   name: document.querySelector('#name-filter'),
   phase: document.querySelector('#phase-filter'),
   correlationKey: document.querySelector('#correlation-key-filter'),
@@ -113,7 +116,22 @@ function toolForEvent(event) {
   return mergeDefined(state.tools.get(tool.call_id) || {}, tool);
 }
 
-function eventCategory(event) {
+const CATEGORY_ORDER = [
+  'agent_loop', 'context', 'hooks', 'supervision', 'tool',
+  'decision', 'multi_agent', 'model', 'code', 'raw',
+];
+
+function compareCategories(left, right) {
+  const leftIndex = CATEGORY_ORDER.indexOf(left);
+  const rightIndex = CATEGORY_ORDER.indexOf(right);
+  if (leftIndex === -1 && rightIndex === -1) return left.localeCompare(right);
+  if (leftIndex === -1) return 1;
+  if (rightIndex === -1) return -1;
+  return leftIndex - rightIndex;
+}
+
+function teachingCategory(event) {
+  if (event.harness?.name?.startsWith('hook_')) return 'hooks';
   if (event.harness?.category) return event.harness.category;
   if (event.payload_type.startsWith('code_cell_')) return 'code';
   if (event.payload_type.startsWith('inference_')) return 'model';
@@ -209,8 +227,7 @@ function matches(event) {
   if (elements.thread.value && event.thread_id !== elements.thread.value) return false;
   if (elements.turn.value && event.codex_turn_id !== elements.turn.value) return false;
   if (elements.step.value && event.harness?.step_id !== elements.step.value) return false;
-  const category = elements.category.value;
-  if (category && eventCategory(event) !== category) return false;
+  if (state.selectedCategories.size && !state.selectedCategories.has(teachingCategory(event))) return false;
   const selectedName = elements.name.value;
   if (selectedName && ![event.harness?.name, toolForEvent(event)?.name].includes(selectedName)) return false;
   if (elements.phase.value && eventPhase(event) !== elements.phase.value) return false;
@@ -247,12 +264,44 @@ function refreshSelect(select, values, defaultLabel) {
   select.value = sorted.includes(selected) ? selected : '';
 }
 
+function updateCategorySummary() {
+  const selected = [...state.selectedCategories].sort(compareCategories);
+  if (selected.length === 0) elements.categorySummary.textContent = 'All categories';
+  else if (selected.length <= 2) elements.categorySummary.textContent = selected.map(sentence).join(' + ');
+  else elements.categorySummary.textContent = `${selected.length} categories`;
+}
+
+function refreshCategoryOptions() {
+  const fragment = document.createDocumentFragment();
+  for (const category of [...state.options.categories].sort(compareCategories)) {
+    const option = document.createElement('label');
+    option.className = `category-option category-${category}`;
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = category;
+    checkbox.checked = state.selectedCategories.has(category);
+    checkbox.dataset.testid = `category-${category}`;
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) state.selectedCategories.add(category);
+      else state.selectedCategories.delete(category);
+      updateCategorySummary();
+      renderEvents(false);
+    });
+    const label = document.createElement('span');
+    label.textContent = sentence(category);
+    option.append(checkbox, label);
+    fragment.append(option);
+  }
+  elements.categoryOptions.replaceChildren(fragment);
+  updateCategorySummary();
+}
+
 function refreshOptions() {
   refreshSelect(elements.payload, state.options.payloadTypes, 'All packet types');
   refreshSelect(elements.thread, state.options.threads, 'All threads');
   refreshSelect(elements.turn, state.options.turns, 'All turns');
   refreshSelect(elements.step, state.options.steps, 'All steps');
-  refreshSelect(elements.category, state.options.categories, 'All categories');
+  refreshCategoryOptions();
   refreshSelect(elements.name, state.options.names, 'All event names');
   refreshSelect(elements.phase, state.options.phases, 'All phases');
   refreshSelect(elements.correlationKey, state.options.correlationKeys, 'Any key');
@@ -263,7 +312,7 @@ function addOptions(event) {
   if (event.thread_id) state.options.threads.add(event.thread_id);
   if (event.codex_turn_id) state.options.turns.add(event.codex_turn_id);
   if (event.harness?.step_id) state.options.steps.add(event.harness.step_id);
-  state.options.categories.add(eventCategory(event));
+  state.options.categories.add(teachingCategory(event));
   if (event.harness?.name) state.options.names.add(event.harness.name);
   if (toolForEvent(event)?.name) state.options.names.add(toolForEvent(event).name);
   const phase = eventPhase(event);
@@ -299,7 +348,7 @@ function summaryValue(value) {
 function renderOverview(event) {
   const tool = toolForEvent(event);
   const phase = eventPhase(event);
-  elements.detailCategory.textContent = sentence(eventCategory(event));
+  elements.detailCategory.textContent = sentence(teachingCategory(event));
   elements.detailPhase.textContent = sentence(phase);
   elements.detailPhase.hidden = !phase;
   elements.detailEventTitle.textContent = eventIdentity(event);
@@ -468,7 +517,7 @@ function showDetail(event) {
 }
 
 function eventRow(event) {
-  const category = eventCategory(event);
+  const category = teachingCategory(event);
   const item = document.createElement('li');
   item.className = `event-row category-${category}`;
   const button = document.createElement('button');
@@ -516,7 +565,7 @@ function renderEvents(follow = state.followLive) {
   for (const event of filtered) fragment.append(eventRow(event));
   elements.list.replaceChildren(fragment);
   updateCounts(filtered.length);
-  elements.reset.disabled = !filterControls.some((control) => (
+  elements.reset.disabled = state.selectedCategories.size === 0 && !filterControls.some((control) => (
     control.type === 'checkbox' ? control.checked : Boolean(control.value)
   ));
   elements.empty.hidden = displayed.length > 0;
@@ -604,7 +653,7 @@ function connect() {
 
 const filterControls = [
   elements.search, elements.payload, elements.thread, elements.turn, elements.step,
-  elements.category, elements.name, elements.phase, elements.correlationKey,
+  elements.name, elements.phase, elements.correlationKey,
   elements.correlationValue, elements.harnessOnly,
 ];
 for (const control of filterControls) {
@@ -616,8 +665,20 @@ elements.reset.addEventListener('click', () => {
     if (control.type === 'checkbox') control.checked = false;
     else control.value = '';
   }
+  state.selectedCategories.clear();
+  elements.category.open = false;
+  refreshCategoryOptions();
   elements.harnessOnly.checked = false;
   renderEvents(false);
+});
+document.addEventListener('click', (event) => {
+  if (elements.category.open && !elements.category.contains(event.target)) elements.category.open = false;
+});
+elements.category.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    elements.category.open = false;
+    elements.categorySummary.focus();
+  }
 });
 elements.pause.addEventListener('click', () => {
   state.paused = !state.paused;
