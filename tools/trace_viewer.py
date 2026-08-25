@@ -163,16 +163,63 @@ def trace_root_path(input_path: str) -> Path:
     return path
 
 
+def trace_discovery_key(path: Path) -> tuple[int, int, str]:
+    """Prefer the primary Codex task over Guardian or other subagent bundles."""
+    started_at = sys.maxsize
+    manifest_path = path.parent / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_started_at = manifest.get("started_at_unix_ms")
+        if isinstance(manifest_started_at, int):
+            started_at = manifest_started_at
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+
+    session_source: Any = None
+    try:
+        for event in events(path):
+            payload = event["payload"]
+            if payload.get("type") != "thread_started":
+                continue
+            metadata_reference = payload.get("metadata_payload")
+            metadata_path_value = (
+                metadata_reference.get("path")
+                if isinstance(metadata_reference, dict)
+                else None
+            )
+            if not isinstance(metadata_path_value, str):
+                break
+            metadata_path = Path(metadata_path_value)
+            if metadata_path.is_absolute() or ".." in metadata_path.parts:
+                break
+            metadata = json.loads(
+                (path.parent / metadata_path).read_text(encoding="utf-8")
+            )
+            if isinstance(metadata, dict):
+                session_source = metadata.get("session_source")
+            break
+    except (OSError, json.JSONDecodeError, TraceInputError):
+        pass
+
+    if isinstance(session_source, dict) and "subagent" in session_source:
+        session_rank = 2
+    elif session_source is None:
+        session_rank = 1
+    else:
+        session_rank = 0
+    return session_rank, started_at, path.parent.name
+
+
 def discover_trace(root: Path) -> Path | None:
     try:
-        candidates = sorted(
+        candidates = [
             child / "trace.jsonl"
             for child in root.iterdir()
             if child.is_dir() and (child / "trace.jsonl").is_file()
-        )
+        ]
     except OSError as error:
         raise TraceInputError(f"cannot inspect trace root: {error}") from error
-    return candidates[0] if candidates else None
+    return min(candidates, key=trace_discovery_key) if candidates else None
 
 
 def parse_event_line(

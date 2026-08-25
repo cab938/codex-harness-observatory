@@ -357,6 +357,62 @@ class TraceViewerTest(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=2)
 
+    def test_discovery_prefers_primary_task_over_lexically_first_subagent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+
+            def write_bundle(name, trace_id, started_at, session_source):
+                bundle = root / name
+                payloads = bundle / "payloads"
+                payloads.mkdir(parents=True)
+                (bundle / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "trace_id": trace_id,
+                            "started_at_unix_ms": started_at,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (payloads / "1.json").write_text(
+                    json.dumps({"session_source": session_source}),
+                    encoding="utf-8",
+                )
+                events = [
+                    json.loads(self.raw_event_line(1)),
+                    {
+                        "schema_version": 2,
+                        "seq": 2,
+                        "wall_time_unix_ms": started_at,
+                        "rollout_id": trace_id,
+                        "thread_id": trace_id,
+                        "codex_turn_id": None,
+                        "payload": {
+                            "type": "thread_started",
+                            "thread_id": trace_id,
+                            "metadata_payload": {"path": "payloads/1.json"},
+                        },
+                    },
+                ]
+                (bundle / "trace.jsonl").write_text(
+                    "".join(
+                        json.dumps(event, separators=(",", ":")) + "\n"
+                        for event in events
+                    ),
+                    encoding="utf-8",
+                )
+                return bundle / "trace.jsonl"
+
+            write_bundle(
+                "trace-a-guardian",
+                "guardian",
+                1001,
+                {"subagent": {"other": "guardian"}},
+            )
+            primary = write_bundle("trace-z-primary", "primary", 1000, "vscode")
+
+            self.assertEqual(trace_viewer.discover_trace(root), primary)
+
     @staticmethod
     def raw_event_line(seq):
         return json.dumps(
