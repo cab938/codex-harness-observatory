@@ -47,7 +47,9 @@ const elements = {
   list: document.querySelector('#event-list'),
   empty: document.querySelector('#empty-state'),
   matched: document.querySelector('#matched-count'),
+  countLabel: document.querySelector('#count-label'),
   received: document.querySelector('#received-count'),
+  receivedContext: document.querySelector('#received-context'),
   buffered: document.querySelector('#buffered-count'),
   notice: document.querySelector('#stream-notice'),
   detail: document.querySelector('#event-detail'),
@@ -58,6 +60,8 @@ const elements = {
   detailEventTitle: document.querySelector('#detail-event-title'),
   detailDescription: document.querySelector('#detail-description'),
   detailFacts: document.querySelector('#detail-facts'),
+  identifierDetails: document.querySelector('#identifier-details'),
+  detailIdentifiers: document.querySelector('#detail-identifiers'),
   evidenceSection: document.querySelector('#evidence-section'),
   artifactLinks: document.querySelector('#artifact-links'),
   artifactViewer: document.querySelector('#artifact-viewer'),
@@ -76,10 +80,17 @@ function text(value, fallback = '-') {
 function setConnection(mode, label) {
   elements.connection.dataset.state = mode;
   elements.connectionLabel.textContent = label;
+  elements.connection.hidden = mode === 'live';
 }
 
 function humanize(value) {
   return text(value, '?').replaceAll('_', ' ');
+}
+
+function sentence(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const label = humanize(value);
+  return label === '?' ? label : label.charAt(0).toUpperCase() + label.slice(1);
 }
 
 function mergeDefined(base, update) {
@@ -124,7 +135,9 @@ function toolLifecycle(event) {
 }
 
 function withoutRepeatedPhase(label, event) {
-  const suffix = ` ${humanize(eventPhase(event))}`;
+  const phase = eventPhase(event);
+  if (!phase) return label;
+  const suffix = ` ${humanize(phase)}`;
   return label.endsWith(suffix) ? label.slice(0, -suffix.length) : label;
 }
 
@@ -132,23 +145,23 @@ function eventIdentity(event) {
   const tool = toolForEvent(event);
   if (tool?.name) {
     const action = event.harness ? humanize(event.harness.name) : toolLifecycle(event);
-    return withoutRepeatedPhase(`${tool.name} · ${action}`, event);
+    return withoutRepeatedPhase(`${tool.name} · ${sentence(action)}`, event);
   }
   if (event.payload_type === 'protocol_event_observed') {
-    return humanize(event.payload_metadata?.event_type || event.payload_type);
+    return sentence(event.payload_metadata?.event_type || event.payload_type);
   }
   if (event.payload_type.startsWith('inference_')) {
     const inferenceLabels = {
-      inference_started: 'model request',
-      inference_completed: 'model response',
-      inference_failed: 'model request failed',
-      inference_cancelled: 'model request cancelled',
+      inference_started: 'Model request',
+      inference_completed: 'Model response',
+      inference_failed: 'Model request failed',
+      inference_cancelled: 'Model request cancelled',
     };
-    return inferenceLabels[event.payload_type] || humanize(event.payload_type);
+    return inferenceLabels[event.payload_type] || sentence(event.payload_type);
   }
   const harness = event.harness;
   const label = harness ? humanize(harness.name) : humanize(event.payload_type);
-  return withoutRepeatedPhase(label, event);
+  return sentence(withoutRepeatedPhase(label, event));
 }
 
 function eventPhase(event) {
@@ -158,20 +171,25 @@ function eventPhase(event) {
   if (event.payload_type.endsWith('_completed')) return 'completed';
   if (event.payload_type.endsWith('_ended')) return 'ended';
   if (event.payload_type.endsWith('_failed')) return 'failed';
-  return 'packet';
+  return '';
 }
 
 function eventDescription(event) {
   const tool = toolForEvent(event);
-  if (tool?.classification_label && event.harness) {
-    return `${humanize(event.harness.name)} for ${tool.name || 'this tool'}. ${tool.classification_label}.`;
-  }
   if (tool?.classification_label) return tool.classification_label;
-  if (event.payload_type === 'inference_started') return 'Core assembled and sent a model request.';
-  if (event.payload_type === 'inference_completed') return 'Core received the model output items for this sampling request.';
-  if (event.payload_type === 'code_cell_started') return 'The model emitted JavaScript that Codex executes inside code mode.';
-  if (event.harness) return `Core harness transition: ${humanize(event.harness.category)} / ${humanize(event.harness.name)}.`;
-  return `Raw Core rollout event: ${humanize(event.payload_type)}.`;
+  if (event.payload_type === 'inference_started') return 'Model input assembled and sent.';
+  if (event.payload_type === 'inference_completed') return 'Model output items received.';
+  if (event.payload_type === 'code_cell_started') return 'JavaScript entered the built-in code-mode runtime.';
+  const descriptions = {
+    turn_input_disposition: 'Determines whether input starts, steers, or interrupts a turn.',
+    step_context_capture: eventPhase(event) === 'started'
+      ? 'Collecting resources for the agent step.'
+      : 'Environment, tools, and capability roots available to the agent step.',
+    prompt_assembly: 'Model input assembled from conversation and selected context.',
+    compaction_decision: 'Determines whether to retain or compact the active context.',
+    guardian_review: 'A separate reviewer evaluated an approval request.',
+  };
+  return descriptions[event.harness?.name] || '';
 }
 
 function eventSearchText(event) {
@@ -214,6 +232,13 @@ function formatStarted(value) {
   return new Date(value).toLocaleString();
 }
 
+function formatEventTime(value) {
+  if (!Number.isFinite(value)) return '-';
+  const date = new Date(value);
+  const time = date.toLocaleTimeString([], { hour12: false });
+  return `${time}.${String(date.getMilliseconds()).padStart(3, '0')}`;
+}
+
 function refreshSelect(select, values, defaultLabel) {
   const selected = select.value;
   const sorted = [...values].sort();
@@ -241,38 +266,70 @@ function addOptions(event) {
   state.options.categories.add(eventCategory(event));
   if (event.harness?.name) state.options.names.add(event.harness.name);
   if (toolForEvent(event)?.name) state.options.names.add(toolForEvent(event).name);
-  state.options.phases.add(eventPhase(event));
+  const phase = eventPhase(event);
+  if (phase) state.options.phases.add(phase);
   for (const key of Object.keys(event.harness?.correlations || {})) {
     state.options.correlationKeys.add(key);
   }
 }
 
-function appendFact(label, value) {
+function appendFact(target, label, value, seenValues = null) {
   if (value === null || value === undefined || value === '') return;
+  const rendered = typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value);
+  if (seenValues?.has(rendered)) return;
+  seenValues?.add(rendered);
   const wrapper = document.createElement('div');
   const term = document.createElement('dt');
   const detail = document.createElement('dd');
   term.textContent = label;
-  detail.textContent = String(value);
+  detail.textContent = rendered;
   wrapper.append(term, detail);
-  elements.detailFacts.append(wrapper);
+  target.append(wrapper);
+}
+
+function summaryValue(value) {
+  if (typeof value === 'boolean' || typeof value === 'number') return value;
+  if (typeof value === 'string' && value.length <= 120) return value;
+  if (Array.isArray(value) && value.length <= 5 && value.every((item) => ['string', 'number', 'boolean'].includes(typeof item))) {
+    return value.join(', ');
+  }
+  return null;
 }
 
 function renderOverview(event) {
   const tool = toolForEvent(event);
-  elements.detailCategory.textContent = eventCategory(event);
-  elements.detailPhase.textContent = eventPhase(event);
+  const phase = eventPhase(event);
+  elements.detailCategory.textContent = sentence(eventCategory(event));
+  elements.detailPhase.textContent = sentence(phase);
+  elements.detailPhase.hidden = !phase;
   elements.detailEventTitle.textContent = eventIdentity(event);
-  elements.detailDescription.textContent = eventDescription(event);
+  const description = eventDescription(event);
+  elements.detailDescription.textContent = description;
+  elements.detailDescription.hidden = !description;
   elements.detailFacts.replaceChildren();
-  appendFact('Sequence', `#${event.seq}`);
-  appendFact('Tool', tool?.name);
-  appendFact('Tool class', tool?.classification_label);
-  appendFact('Requester', tool?.requester ? humanize(tool.requester) : null);
-  appendFact('Tool call ID', tool?.call_id);
-  appendFact('Thread', event.thread_id);
-  appendFact('Turn', event.codex_turn_id);
-  appendFact('Agent step', event.harness?.step_id);
+  appendFact(elements.detailFacts, 'Sequence', `#${event.seq}`);
+  appendFact(elements.detailFacts, 'Outcome', event.harness?.outcome ? sentence(event.harness.outcome) : null);
+  appendFact(elements.detailFacts, 'Reason', event.harness?.reason ? humanize(event.harness.reason) : null);
+  appendFact(elements.detailFacts, 'Requester', tool?.requester ? sentence(tool.requester) : null);
+  for (const [key, value] of Object.entries(event.harness?.details || {})) {
+    if (key.endsWith('_id')) continue;
+    appendFact(elements.detailFacts, sentence(key), summaryValue(value));
+  }
+
+  elements.detailIdentifiers.replaceChildren();
+  const seenIdentifiers = new Set();
+  appendFact(elements.detailIdentifiers, 'Tool call', tool?.call_id, seenIdentifiers);
+  appendFact(elements.detailIdentifiers, 'Thread', event.thread_id, seenIdentifiers);
+  appendFact(elements.detailIdentifiers, 'Turn', event.codex_turn_id, seenIdentifiers);
+  appendFact(elements.detailIdentifiers, 'Agent step', event.harness?.step_id, seenIdentifiers);
+  for (const [key, value] of Object.entries(event.harness?.correlations || {})) {
+    appendFact(elements.detailIdentifiers, sentence(key), summaryValue(value), seenIdentifiers);
+  }
+  for (const [key, value] of Object.entries(event.payload_metadata || {})) {
+    if (!key.endsWith('_id')) continue;
+    appendFact(elements.detailIdentifiers, sentence(key), summaryValue(value), seenIdentifiers);
+  }
+  elements.identifierDetails.hidden = elements.detailIdentifiers.childElementCount === 0;
 }
 
 function referenceKind(reference) {
@@ -329,8 +386,8 @@ function patchDetails(content) {
 }
 
 function renderArtifact(reference, artifact) {
-  elements.artifactTitle.textContent = `${humanize(referenceKind(reference))} · ${artifact.path}`;
-  elements.artifactMeta.textContent = [artifact.media_type, formatBytes(artifact.size_bytes)].filter(Boolean).join(' · ');
+  elements.artifactTitle.textContent = artifact.path;
+  elements.artifactMeta.textContent = [sentence(referenceKind(reference)), artifact.media_type, formatBytes(artifact.size_bytes)].filter(Boolean).join(' · ');
   elements.artifactContent.textContent = typeof artifact.content === 'string'
     ? artifact.content
     : JSON.stringify(artifact.content, null, 2);
@@ -360,8 +417,8 @@ async function openArtifact(event, reference, button) {
   }
   elements.artifactViewer.hidden = false;
   elements.artifactTitle.textContent = reference.path;
-  elements.artifactMeta.textContent = 'Loading…';
-  elements.artifactContent.textContent = 'Loading artifact content…';
+  elements.artifactMeta.textContent = 'Loading';
+  elements.artifactContent.textContent = '';
   elements.patchExplanation.hidden = true;
   try {
     const response = await fetch(`/api/artifact?path=${encodeURIComponent(reference.path)}`, { cache: 'no-store' });
@@ -394,10 +451,7 @@ function renderArtifactLinks(event) {
     kind.textContent = humanize(referenceKind(reference));
     const path = document.createElement('code');
     path.textContent = reference.path;
-    const field = document.createElement('span');
-    field.className = 'artifact-field';
-    field.textContent = humanize(reference.field);
-    button.append(kind, path, field);
+    button.append(kind, path);
     button.addEventListener('click', () => openArtifact(event, reference, button));
     elements.artifactLinks.append(button);
   });
@@ -425,10 +479,10 @@ function eventRow(event) {
   button.addEventListener('click', () => showDetail(event));
   const columns = [
     ['event-seq', `#${event.seq}`],
-    ['event-kind', category],
+    ['event-time', formatEventTime(event.wall_time_unix_ms)],
     ['event-name', eventIdentity(event)],
-    ['event-phase', eventPhase(event)],
-    ['event-thread', text(event.thread_id, 'no thread')],
+    ['event-kind', sentence(category)],
+    ['event-phase', sentence(eventPhase(event))],
   ];
   for (const [className, value] of columns) {
     const span = document.createElement('span');
@@ -448,7 +502,9 @@ function updateCounts(filteredCount) {
   const visibleCount = displayedEvents().length;
   const bufferedCount = state.events.length - visibleCount;
   elements.matched.textContent = filteredCount;
-  elements.received.textContent = state.events.length;
+  elements.countLabel.textContent = filteredCount === visibleCount ? ` event${visibleCount === 1 ? '' : 's'}` : '';
+  elements.receivedContext.hidden = filteredCount === visibleCount;
+  elements.received.textContent = `${visibleCount} event${visibleCount === 1 ? '' : 's'}`;
   elements.buffered.hidden = bufferedCount === 0;
   elements.buffered.textContent = bufferedCount ? `+${bufferedCount} buffered` : '';
 }
@@ -460,6 +516,9 @@ function renderEvents(follow = state.followLive) {
   for (const event of filtered) fragment.append(eventRow(event));
   elements.list.replaceChildren(fragment);
   updateCounts(filtered.length);
+  elements.reset.disabled = !filterControls.some((control) => (
+    control.type === 'checkbox' ? control.checked : Boolean(control.value)
+  ));
   elements.empty.hidden = displayed.length > 0;
   if (displayed.length > 0 && filtered.length === 0) {
     elements.empty.hidden = false;
@@ -570,7 +629,6 @@ elements.pause.addEventListener('click', () => {
 });
 elements.follow.addEventListener('click', () => {
   state.followLive = !state.followLive;
-  elements.follow.textContent = `Follow: ${state.followLive ? 'on' : 'off'}`;
   elements.follow.setAttribute('aria-pressed', state.followLive ? 'true' : 'false');
   if (state.followLive) elements.list.scrollTop = elements.list.scrollHeight;
 });
