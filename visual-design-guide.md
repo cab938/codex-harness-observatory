@@ -17,6 +17,7 @@ Minimalism means fewer elements, words, containers, and visual effects. It does 
 - Maintain clear text and control contrast. Do not rely on faint gray text to create hierarchy.
 - Use color sparingly for selection, relationships, warnings, errors, and other meanings that benefit from rapid recognition.
 - Never make color the only carrier of meaning.
+- Give each event type a stable semantic color. Reuse that color for the same type in later widgets, always paired with a text label or other non-color encoding.
 
 ## Information density
 

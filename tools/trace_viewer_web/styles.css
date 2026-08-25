@@ -14,6 +14,15 @@
   --purple: #6545a4;
   --warning: #8a5b00;
   --danger: #b42318;
+  --type-raw: #465566;
+  --type-tool: #0067b1;
+  --type-model: #6b35aa;
+  --type-multi-agent: var(--type-model);
+  --type-agent-loop: #007765;
+  --type-context: var(--type-agent-loop);
+  --type-code: var(--type-agent-loop);
+  --type-decision: #8c5600;
+  --type-supervision: #b42318;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -306,15 +315,16 @@ summary:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.event-kind { color: var(--type-raw); font-weight: 700; }
 .event-phase { color: var(--quiet); }
-.category-tool .event-kind { color: var(--accent); }
-.category-model .event-kind,
-.category-multi_agent .event-kind { color: var(--purple); }
-.category-code .event-kind,
-.category-context .event-kind,
-.category-agent_loop .event-kind { color: var(--teal); }
-.category-decision .event-kind { color: var(--warning); }
-.category-supervision .event-kind { color: var(--danger); }
+.category-tool .event-kind { color: var(--type-tool); }
+.category-model .event-kind { color: var(--type-model); }
+.category-multi_agent .event-kind { color: var(--type-multi-agent); }
+.category-agent_loop .event-kind { color: var(--type-agent-loop); }
+.category-context .event-kind { color: var(--type-context); }
+.category-code .event-kind { color: var(--type-code); }
+.category-decision .event-kind { color: var(--type-decision); }
+.category-supervision .event-kind { color: var(--type-supervision); }
 
 .empty-state,
 .detail-empty {
