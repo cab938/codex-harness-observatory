@@ -1,6 +1,6 @@
 # Instrumentation Tranches
 
-All tranches write `HarnessTraceEvent` records into the existing rollout trace. They must not create another log file, emit app-server or desktop events, or persist model reasoning deltas. Event details should contain compact facts that explain a state transition. Existing payload references remain the source for full model requests, responses, tool arguments, and results.
+Core instrumentation tranches 0-10 write `HarnessTraceEvent` records into the existing rollout trace. They must not create another log file, emit desktop events, or persist model reasoning deltas. Event details should contain compact facts that explain a state transition. Existing payload references remain the source for full model requests, responses, tool arguments, and results. Phase 3 extends that same ledger with explicitly scoped App Server and MCP transport frames for the lecture sequence.
 
 Every event should carry the current `trace_step_id` when a `StepContext` is available. Use `call_id`, approval/review ID, child thread ID, and similar values as correlations. Prefer categorical outcomes and reasons over human-readable summaries that are hard to aggregate.
 
@@ -273,6 +273,119 @@ Focused verification:
 - one browser interaction pass proving filter changes, event selection, detail display, pause/resume, and receipt of an event appended after connection
 
 Delivered coverage: `tools/trace_viewer.py --serve` launches one standard-library loopback server and static browser client. It streams initial and appended events, exposes safe header metadata, supports the complete filter set plus pause/resume and follow-live, and opens a redacted event detail pane without reading payload contents. Python stream/server tests and an isolated browser interaction pass completed successfully.
+
+## Phase 3: Lecture protocol and execution logging
+
+Phase 3 preserves the single append-only `trace.jsonl` ledger and payload store. Protocol envelopes contain bounded metadata; exact frames are payload artifacts and are exposed by the local viewer only when full-content mode is enabled.
+
+## Tranche 11: App Server and MCP JSON-RPC frames
+
+Status: complete.
+
+Delivered coverage:
+
+- `app_server_frame_observed` captures client-to-server frames before App Server dispatch and server-to-client frames after connection-specific filtering but before delivery;
+- request/response correlation preserves the originating App Server method and
+  source thread, turn, and task-root context in both directions, including
+  initialization and `thread/start` traffic buffered before the root trace
+  exists;
+- App Server envelopes normalize source and new thread IDs, item IDs, fork
+  lineage, and session IDs while retaining the exact frame as a payload;
+- `mcp_frame_observed` wraps every rmcp client transport shape and captures typed frames immediately before send and after receive;
+- MCP response envelopes inherit the request method and trace-only `mcp_call_id`, when present, so packet evidence joins to the canonical tool lifecycle; and
+- exact JSON remains in `payloads/` under the new `app_server_frame` and `mcp_frame` payload kinds.
+
+## Tranche 12: Lecture-focused observatory views
+
+Status: complete.
+
+The viewer exposes additive `app_server`, `mcp`, `tool`, and `decision`
+categories. These map directly to Lecture 2 App Server traffic, Lecture 3
+execution plus MCP traffic, and Lecture 4 execution plus approval/sandbox
+decisions. Protocol methods participate in name filtering, frame kinds
+participate in phase filtering, and wire request/call IDs participate in
+correlation filtering. App Server request/response pairs are linked by
+connection, direction, and request ID. A deterministic Lecture 2 checker
+accepts the expected thread, turn, item, steer, completion, and fork lifecycle
+and rejects an extra turn start after steering.
+
+## Phase 4: Desktop shared-run teaching
+
+Status: in implementation.
+
+Phase 4 changes the run ownership model only when explicitly enabled through
+`CODEX_ROLLOUT_TRACE_SHARED_RUN=1`. One App Server lifetime then owns one
+append-only teaching bundle. It is the first phase that makes simultaneous
+independent Desktop tasks visible in one exact event order. See
+`DESKTOP_OBSERVATORY_PLAN.md` for the settled teaching contract and launch
+boundary.
+
+## Tranche 13: Shared App Server run and task identity
+
+Primary ownership:
+
+- `codex-rs/rollout-trace/`
+- App Server trace lifecycle and transport attribution boundaries
+
+Required behavior:
+
+- one writer and global `seq` allocation for all root tasks in an opt-in App
+  Server lifetime;
+- `task_root_thread_id` on attributable raw/harness/wire evidence;
+- root task completion does not end the shared run; App Server shutdown does;
+- descendants retain their root identity and parent/child correlations; and
+- pre-root or otherwise unattributable App Server frames remain in a session
+  lane.
+
+Focused verification:
+
+- two roots interleave into one bundle with strictly increasing `seq`;
+- ending one root leaves the second writer path live; and
+- one child task is associated with its parent root.
+
+## Tranche 14: Concurrent MCP attribution
+
+Primary ownership:
+
+- `codex-rs/rmcp-client/`
+- `codex-rs/codex-mcp/src/rmcp_client.rs`
+
+Required behavior:
+
+- every MCP transport frame retains root, thread, turn, and bridge call
+  context when available; and
+- pending response correlation is connection-scoped so repeated JSON-RPC IDs
+  from overlapping tasks cannot cross-attribute evidence.
+
+Focused verification:
+
+- overlapping calls using the same request ID retain their respective roots
+  and methods on responses.
+
+## Tranche 15: Concurrent task viewer and Desktop route
+
+Primary ownership:
+
+- `tools/trace_viewer.py`, `tools/trace_viewer_web/`
+- the teaching launcher and Desktop candidate build route
+
+Required behavior:
+
+- all-task and task-focus modes show root lanes, child nesting, active/completed
+  status, and session traffic while preserving raw `seq` order;
+- full content remains the teaching-launcher default, including payload
+  artifacts; and
+- a side-by-side Linux Desktop candidate starts the patched Core via
+  `CODEX_CLI_PATH` and the existing private
+  `CODEX_LINUX_APP_SERVER_BRIDGE_SOCKET` feature.
+
+Focused verification:
+
+- deterministic viewer tests plus one browser interaction cover focus, live
+  interleaving, child nesting, and full payload selection; and
+- isolated Desktop acceptance starts two independent tasks plus one child and
+  retains one shared bundle. Do not mark this tranche complete until that live
+  capture succeeds.
 
 ## Verification budget
 

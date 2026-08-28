@@ -478,7 +478,7 @@ async fn handle_approved_mcp_tool_call(
                     let mcp_call_trace = sess
                         .services
                         .rollout_thread_trace
-                        .start_mcp_call_trace(call_id);
+                        .start_mcp_call_trace(call_id, turn_context.sub_id.clone());
                     Ok((
                         rewritten_arguments,
                         mcp_call_trace.add_request_meta(request_meta),

@@ -2,6 +2,8 @@ use crate::message_processor::ConnectionSessionState;
 use crate::outgoing_message::OutgoingEnvelope;
 use codex_app_server_protocol::ExperimentalApi;
 use codex_app_server_protocol::ServerRequest;
+use codex_rollout_trace::WireFrameDirection;
+use codex_rollout_trace::record_app_server_frame;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -147,6 +149,12 @@ async fn send_message_to_connection(
     if should_skip_notification_for_connection(connection_state, &message) {
         return false;
     }
+
+    record_app_server_frame(
+        connection_id.to_string(),
+        WireFrameDirection::ServerToClient,
+        &message,
+    );
 
     let writer = connection_state.writer.clone();
     let queued_message = QueuedOutgoingMessage {

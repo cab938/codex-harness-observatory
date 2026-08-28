@@ -42,6 +42,10 @@ pub enum RawPayloadKind {
     /// Raw terminal runtime event or stream shard.
     TerminalRuntimeEvent,
     ProtocolEvent,
+    /// Exact JSON-RPC frame observed at the App Server client boundary.
+    AppServerFrame,
+    /// Exact JSON-RPC frame exchanged with an MCP server.
+    McpFrame,
     /// One-shot metadata captured when a Codex session/thread starts.
     SessionMetadata,
     /// Runtime notification payload carried when a child agent reports back to its parent.

@@ -27,6 +27,7 @@ use crate::HarnessStepId;
 use crate::HarnessTraceEvent;
 use crate::InferenceTraceContext;
 use crate::McpCallTraceContext;
+use crate::McpWireTaskContext;
 use crate::RawPayloadKind;
 use crate::RawPayloadRef;
 use crate::RawTraceEventContext;
@@ -39,6 +40,10 @@ use crate::TraceWriter;
 use crate::protocol_event::codex_turn_trace_event;
 use crate::protocol_event::tool_runtime_trace_event;
 use crate::protocol_event::wrapped_protocol_event_type;
+use crate::shared_run::attach_shared_root_if_active;
+use crate::wire::activate_wire_trace;
+use crate::wire::deactivate_wire_trace;
+use crate::wire::register_task_root_thread;
 
 /// Environment variable that enables local trace-bundle recording.
 ///
@@ -90,9 +95,17 @@ enum ThreadTraceContextState {
 #[derive(Clone, Debug)]
 struct EnabledThreadTraceContext {
     writer: Arc<TraceWriter>,
-    root_thread_id: AgentThreadId,
+    task_root_thread_id: AgentThreadId,
     thread_id: AgentThreadId,
+    run_scope: TraceRunScope,
     next_step_ordinal: Arc<AtomicU64>,
+}
+
+/// Scope that owns the terminal lifecycle event for this thread's writer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TraceRunScope {
+    StandaloneRoot,
+    SharedAppServer,
 }
 
 impl ThreadTraceContext {
@@ -112,8 +125,18 @@ impl ThreadTraceContext {
         let Some(root) = std::env::var_os(CODEX_ROLLOUT_TRACE_ROOT_ENV) else {
             return Self::disabled();
         };
+        let task_root_thread_id = metadata.thread_id.clone();
+        if let Some(writer) = attach_shared_root_if_active(&task_root_thread_id) {
+            return match writer {
+                Ok(writer) => Self::start_shared_root(writer, task_root_thread_id, metadata),
+                Err(err) => {
+                    warn!("failed to attach root task to shared rollout trace: {err:#}");
+                    Self::disabled()
+                }
+            };
+        }
         let root = PathBuf::from(root);
-        match start_root_in_root(root.as_path(), metadata) {
+        match start_root_in_root(root.as_path(), metadata, true) {
             Ok(context) => context,
             Err(err) => {
                 warn!("failed to initialize rollout trace bundle: {err:#}");
@@ -130,25 +153,44 @@ impl ThreadTraceContext {
         root: &Path,
         metadata: ThreadStartedTraceMetadata,
     ) -> anyhow::Result<Self> {
-        start_root_in_root(root, metadata)
+        start_root_in_root(root, metadata, false)
     }
 
     /// Starts one thread lifecycle inside an existing rollout bundle.
-    pub(crate) fn start(
+    fn start(
         writer: Arc<TraceWriter>,
-        root_thread_id: AgentThreadId,
+        task_root_thread_id: AgentThreadId,
+        run_scope: TraceRunScope,
         metadata: ThreadStartedTraceMetadata,
     ) -> Self {
         let context = EnabledThreadTraceContext {
             writer,
-            root_thread_id,
+            task_root_thread_id,
             thread_id: metadata.thread_id.clone(),
+            run_scope,
             next_step_ordinal: Arc::new(AtomicU64::new(1)),
         };
+        register_task_root_thread(
+            context.thread_id.clone(),
+            context.task_root_thread_id.clone(),
+        );
         record_thread_started(&context, metadata);
         Self {
             state: ThreadTraceContextState::Enabled(context),
         }
+    }
+
+    pub(crate) fn start_shared_root(
+        writer: Arc<TraceWriter>,
+        task_root_thread_id: AgentThreadId,
+        metadata: ThreadStartedTraceMetadata,
+    ) -> Self {
+        Self::start(
+            writer,
+            task_root_thread_id,
+            TraceRunScope::SharedAppServer,
+            metadata,
+        )
     }
 
     /// Returns whether this handle will write trace events.
@@ -173,7 +215,8 @@ impl ThreadTraceContext {
             ThreadTraceContextState::Disabled => Self::disabled(),
             ThreadTraceContextState::Enabled(context) => Self::start(
                 Arc::clone(&context.writer),
-                context.root_thread_id.clone(),
+                context.task_root_thread_id.clone(),
+                context.run_scope,
                 metadata,
             ),
         }
@@ -181,19 +224,24 @@ impl ThreadTraceContext {
 
     /// Emits terminal trace events for graceful thread shutdown.
     ///
-    /// Spawned child sessions share their root bundle, so only the root
-    /// thread end closes the rollout. Child thread ends update the child thread
-    /// execution state without marking the whole bundle complete.
+    /// Spawned child sessions share their root task's bundle. In standalone
+    /// mode, that root also closes the rollout; in a shared App Server run,
+    /// every task shutdown remains thread-local and the authority guard ends
+    /// the run after the server drains.
     pub fn record_ended(&self, status: RolloutStatus) {
         let ThreadTraceContextState::Enabled(context) = &self.state else {
             return;
         };
-        context.append_best_effort(RawTraceEventPayload::ThreadEnded {
+        context.append_thread_context_best_effort(RawTraceEventPayload::ThreadEnded {
             thread_id: context.thread_id.clone(),
             status: status.clone(),
         });
-        if context.thread_id == context.root_thread_id {
-            context.append_best_effort(RawTraceEventPayload::RolloutEnded { status });
+        if context.run_scope == TraceRunScope::StandaloneRoot
+            && context.thread_id == context.task_root_thread_id
+        {
+            context
+                .append_thread_context_best_effort(RawTraceEventPayload::RolloutEnded { status });
+            deactivate_wire_trace(&context.writer);
         }
     }
 
@@ -213,7 +261,7 @@ impl ThreadTraceContext {
         else {
             return;
         };
-        context.append_best_effort(RawTraceEventPayload::ProtocolEventObserved {
+        context.append_thread_context_best_effort(RawTraceEventPayload::ProtocolEventObserved {
             event_type: event_type.to_string(),
             event_payload,
         });
@@ -368,6 +416,7 @@ impl ThreadTraceContext {
         };
         CodeCellTraceContext::enabled(
             Arc::clone(&context.writer),
+            context.task_root_thread_id.clone(),
             context.thread_id.clone(),
             codex_turn_id,
             runtime_cell_id,
@@ -389,7 +438,11 @@ impl ThreadTraceContext {
         let Some(invocation) = invocation() else {
             return ToolDispatchTraceContext::disabled();
         };
-        ToolDispatchTraceContext::start(Arc::clone(&context.writer), invocation)
+        ToolDispatchTraceContext::start(
+            Arc::clone(&context.writer),
+            context.task_root_thread_id.clone(),
+            invocation,
+        )
     }
 
     /// Builds reusable inference trace context for one Codex turn.
@@ -406,8 +459,9 @@ impl ThreadTraceContext {
         let ThreadTraceContextState::Enabled(context) = &self.state else {
             return InferenceTraceContext::disabled();
         };
-        InferenceTraceContext::enabled(
+        InferenceTraceContext::enabled_for_task(
             Arc::clone(&context.writer),
+            context.task_root_thread_id.clone(),
             context.thread_id.clone(),
             codex_turn_id.into(),
             model.into(),
@@ -431,8 +485,9 @@ impl ThreadTraceContext {
         let ThreadTraceContextState::Enabled(context) = &self.state else {
             return CompactionTraceContext::disabled();
         };
-        CompactionTraceContext::enabled(
+        CompactionTraceContext::enabled_for_task(
             Arc::clone(&context.writer),
+            context.task_root_thread_id.clone(),
             context.thread_id.clone(),
             codex_turn_id.into(),
             compaction_id.into(),
@@ -446,16 +501,31 @@ impl ThreadTraceContext {
     /// Dispatch-level tool IDs remain compact and UI-friendly. This UUID is
     /// deliberately separate: it is only for cross-process log joins where a
     /// rollout-local counter would collide across samples.
-    pub fn start_mcp_call_trace(&self, tool_call_id: impl Into<ToolCallId>) -> McpCallTraceContext {
+    pub fn start_mcp_call_trace(
+        &self,
+        tool_call_id: impl Into<ToolCallId>,
+        codex_turn_id: impl Into<CodexTurnId>,
+    ) -> McpCallTraceContext {
         let ThreadTraceContextState::Enabled(context) = &self.state else {
             return McpCallTraceContext::disabled();
         };
+        let codex_turn_id = codex_turn_id.into();
         let mcp_call_id = Uuid::new_v4().to_string();
-        let trace = McpCallTraceContext::enabled(mcp_call_id.clone());
-        context.append_best_effort(RawTraceEventPayload::McpToolCallCorrelationAssigned {
-            tool_call_id: tool_call_id.into(),
-            mcp_call_id,
-        });
+        let trace = McpCallTraceContext::enabled(
+            mcp_call_id.clone(),
+            McpWireTaskContext {
+                root_thread_id: context.task_root_thread_id.clone(),
+                thread_id: context.thread_id.clone(),
+                codex_turn_id: codex_turn_id.clone(),
+            },
+        );
+        context.append_with_context_best_effort(
+            codex_turn_id,
+            RawTraceEventPayload::McpToolCallCorrelationAssigned {
+                tool_call_id: tool_call_id.into(),
+                mcp_call_id,
+            },
+        );
         trace
     }
 }
@@ -463,6 +533,7 @@ impl ThreadTraceContext {
 fn start_root_in_root(
     root: &Path,
     metadata: ThreadStartedTraceMetadata,
+    activate_wire_capture: bool,
 ) -> anyhow::Result<ThreadTraceContext> {
     let trace_id = Uuid::new_v4().to_string();
     let thread_id = metadata.thread_id.clone();
@@ -475,15 +546,31 @@ fn start_root_in_root(
     )?;
     let writer = Arc::new(writer);
 
-    if let Err(err) = writer.append(RawTraceEventPayload::RolloutStarted {
-        trace_id,
-        root_thread_id: thread_id.clone(),
-    }) {
+    if let Err(err) = writer.append_with_context(
+        RawTraceEventContext {
+            task_root_thread_id: Some(thread_id.clone()),
+            thread_id: Some(thread_id.clone()),
+            codex_turn_id: None,
+        },
+        RawTraceEventPayload::RolloutStarted {
+            trace_id,
+            root_thread_id: thread_id.clone(),
+        },
+    ) {
         warn!("failed to append rollout trace event: {err:#}");
     }
 
+    if activate_wire_capture {
+        activate_wire_trace(&writer);
+    }
+
     debug!("recording rollout trace at {}", bundle_dir.display());
-    Ok(ThreadTraceContext::start(writer, thread_id, metadata))
+    Ok(ThreadTraceContext::start(
+        writer,
+        thread_id,
+        TraceRunScope::StandaloneRoot,
+        metadata,
+    ))
 }
 
 fn record_thread_started(
@@ -492,7 +579,7 @@ fn record_thread_started(
 ) {
     let metadata_payload =
         context.write_json_payload_best_effort(RawPayloadKind::SessionMetadata, &metadata);
-    context.append_best_effort(RawTraceEventPayload::ThreadStarted {
+    context.append_thread_context_best_effort(RawTraceEventPayload::ThreadStarted {
         thread_id: metadata.thread_id,
         agent_path: metadata.agent_path,
         metadata_payload,
@@ -546,18 +633,13 @@ impl EnabledThreadTraceContext {
         }
     }
 
-    fn append_best_effort(&self, payload: RawTraceEventPayload) {
-        if let Err(err) = self.writer.append(payload) {
-            warn!("failed to append rollout trace event: {err:#}");
-        }
-    }
-
     fn append_with_context_best_effort(
         &self,
         codex_turn_id: CodexTurnId,
         payload: RawTraceEventPayload,
     ) {
         let event_context = RawTraceEventContext {
+            task_root_thread_id: Some(self.task_root_thread_id.clone()),
             thread_id: Some(self.thread_id.clone()),
             codex_turn_id: Some(codex_turn_id),
         };
@@ -568,6 +650,7 @@ impl EnabledThreadTraceContext {
 
     fn append_thread_context_best_effort(&self, payload: RawTraceEventPayload) {
         let event_context = RawTraceEventContext {
+            task_root_thread_id: Some(self.task_root_thread_id.clone()),
             thread_id: Some(self.thread_id.clone()),
             codex_turn_id: None,
         };

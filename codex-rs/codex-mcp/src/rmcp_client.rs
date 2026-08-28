@@ -1080,7 +1080,7 @@ async fn make_rmcp_client(
     let oauth_credential_name = config.oauth_credential_name(server_name);
     let McpServerConfig { transport, .. } = config;
 
-    match transport {
+    let client = match transport {
         McpServerTransportConfig::Stdio {
             command,
             args,
@@ -1163,7 +1163,8 @@ async fn make_rmcp_client(
             .await
             .map_err(StartupOutcomeError::from)
         }
-    }
+    };
+    client.map(|client| client.with_observatory_server_name(server_name))
 }
 
 #[cfg(test)]

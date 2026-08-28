@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -41,12 +41,25 @@ SENSITIVE_CORRELATION_KEYS = {
 }
 RAW_SAFE_KEYS = {
     "status", "model", "provider_name", "kind", "event_type", "trace_id",
-    "root_thread_id", "agent_path",
+    "root_thread_id", "agent_path", "direction", "frame_kind", "method",
+    "server_name", "transport", "connection_id", "request_id", "session_id",
+    "source_thread_id", "new_thread_id", "item_id", "forked_from_id",
 }
+APP_SERVER_METADATA_KEYS = (
+    "connection_id", "request_id", "method", "direction", "frame_kind",
+    "source_thread_id", "new_thread_id", "item_id", "forked_from_id", "session_id",
+)
 MANIFEST_SAFE_KEYS = {
     "schema_version", "trace_id", "rollout_id", "root_thread_id",
     "started_at_unix_ms", "raw_event_log", "payloads_dir",
 }
+TASK_ROOT_ID_FIELDS = (
+    "task_root_thread_id",
+    "taskRootThreadId",
+    "root_task_thread_id",
+    "rootTaskThreadId",
+)
+TERMINAL_TASK_STATUSES = {"completed", "failed", "cancelled", "aborted"}
 WEB_ASSET_DIR = Path(__file__).with_name("trace_viewer_web")
 
 # The trace envelope intentionally accepts new string-valued event names.  The
@@ -134,6 +147,45 @@ class Filters:
     phase: set[str]
     correlations: tuple[tuple[str, str], ...]
     harness_only: bool
+
+
+@dataclass
+class TaskThread:
+    """One thread discovered in a shared-run task tree."""
+
+    thread_id: str
+    status: str = "running"
+    parent_thread_id: str | None = None
+    agent_path: str | None = None
+
+    def metadata(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "threadId": self.thread_id,
+            "status": self.status,
+            "lifecycle": "ended" if self.status in TERMINAL_TASK_STATUSES else "active",
+        }
+        if self.parent_thread_id is not None:
+            result["parentThreadId"] = self.parent_thread_id
+        if self.agent_path is not None:
+            result["agentPath"] = self.agent_path
+        return result
+
+
+@dataclass
+class TaskState:
+    """Incremental, presentation-only state derived from raw trace order."""
+
+    root_thread_id: str
+    status: str = "running"
+    threads: dict[str, TaskThread] = field(default_factory=dict)
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "rootThreadId": self.root_thread_id,
+            "status": self.status,
+            "lifecycle": "ended" if self.status in TERMINAL_TASK_STATUSES else "active",
+            "threads": [thread.metadata() for thread in self.threads.values()],
+        }
 
 
 def parse_correlation(value: str) -> tuple[str, str]:
@@ -280,6 +332,72 @@ def harness(event: dict[str, Any]) -> dict[str, Any] | None:
     return contained if payload.get("type") == "harness_event_observed" and isinstance(contained, dict) else None
 
 
+def teaching_category(event: dict[str, Any], item: dict[str, Any] | None = None) -> str:
+    payload_type = event["payload"]["type"]
+    if payload_type == "app_server_frame_observed":
+        return "app_server"
+    if payload_type == "mcp_frame_observed":
+        return "mcp"
+    if item is not None and isinstance(item.get("category"), str):
+        return item["category"]
+    return "raw"
+
+
+def filter_correlations(payload: dict[str, Any], item: dict[str, Any] | None) -> dict[str, Any]:
+    correlations = item.get("correlations") if item is not None else None
+    matched = dict(correlations) if isinstance(correlations, dict) else {}
+    for key, value in app_server_metadata(payload).items():
+        matched[key] = str(value)
+    for key, value in payload.items():
+        if key.endswith("_id") and isinstance(value, (str, int)):
+            matched[key] = str(value)
+    return matched
+
+
+def app_server_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    """Project stable App Server frame metadata without including its payload."""
+    if payload.get("type") != "app_server_frame_observed":
+        return {}
+    projected: dict[str, Any] = {}
+    containers = [payload]
+    for key in ("metadata", "frame_metadata"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            containers.append(nested)
+    for container in containers:
+        for key in APP_SERVER_METADATA_KEYS:
+            value = container.get(key)
+            if isinstance(value, (str, int, float, bool)) and value != "":
+                projected[key] = safe_detail(value, key)
+    return projected
+
+
+def app_server_pairing(metadata: dict[str, Any]) -> dict[str, str] | None:
+    """Return safe pairing metadata for one request/response-capable frame."""
+    connection_id = metadata.get("connection_id")
+    request_id = metadata.get("request_id")
+    if not isinstance(connection_id, str) or not connection_id:
+        return None
+    if not isinstance(request_id, (str, int)) or request_id == "":
+        return None
+    direction = metadata.get("direction")
+    frame_kind = metadata.get("frame_kind")
+    if not isinstance(direction, str) or not isinstance(frame_kind, str):
+        return None
+    normalized_kind = frame_kind.lower()
+    role = "request" if normalized_kind == "request" else (
+        "response" if normalized_kind in {"response", "error"} else "other"
+    )
+    return {
+        "key": f"{connection_id}\x1f{request_id}",
+        "connection_id": connection_id,
+        "request_id": str(request_id),
+        "direction": direction,
+        "frame_kind": frame_kind,
+        "role": role,
+    }
+
+
 def nonempty_string(value: Any) -> bool:
     return isinstance(value, str) and bool(value)
 
@@ -293,6 +411,239 @@ def correlations_for(item: dict[str, Any]) -> dict[str, str]:
         for key, value in correlations.items()
         if isinstance(key, str) and isinstance(value, str) and value
     }
+
+
+def task_root_identity(event: dict[str, Any]) -> tuple[bool, str | None]:
+    """Return whether an event declares a task root, preserving explicit null."""
+    payload = event.get("payload")
+    item = harness(event)
+    correlations = item.get("correlations") if item is not None else None
+    for container in (event, payload, item, correlations):
+        if not isinstance(container, dict):
+            continue
+        for key in TASK_ROOT_ID_FIELDS:
+            if key in container:
+                value = container[key]
+                return True, value if nonempty_string(value) else None
+    return False, None
+
+
+class TaskLedger:
+    """Derive task lanes from one ordered raw ledger without rewriting events."""
+
+    def __init__(self) -> None:
+        self.tasks: dict[str, TaskState] = {}
+        self.thread_roots: dict[str, str] = {}
+        self.legacy_root_thread_id: str | None = None
+        self.max_active_task_count = 0
+
+    def _ensure_task(self, root_thread_id: str) -> TaskState:
+        task = self.tasks.get(root_thread_id)
+        if task is None:
+            task = TaskState(root_thread_id)
+            self.tasks[root_thread_id] = task
+        self._ensure_thread(task, root_thread_id)
+        self.thread_roots.setdefault(root_thread_id, root_thread_id)
+        return task
+
+    def _ensure_thread(self, task: TaskState, thread_id: str) -> TaskThread:
+        thread = task.threads.get(thread_id)
+        if thread is None:
+            thread = TaskThread(thread_id)
+            task.threads[thread_id] = thread
+        self.thread_roots[thread_id] = task.root_thread_id
+        return thread
+
+    @staticmethod
+    def _string_from(mapping: Any, *keys: str) -> str | None:
+        if not isinstance(mapping, dict):
+            return None
+        for key in keys:
+            value = mapping.get(key)
+            if nonempty_string(value):
+                return value
+        return None
+
+    def _event_thread_ids(self, event: dict[str, Any]) -> list[str]:
+        payload = event["payload"]
+        item = harness(event)
+        correlations = item.get("correlations") if item is not None else None
+        values: list[str] = []
+        for mapping, keys in (
+            (event, ("thread_id",)),
+            (payload, ("thread_id", "parent_thread_id", "child_thread_id", "task_thread_id", "target_thread_id")),
+            (correlations, ("parent_thread_id", "child_thread_id", "task_thread_id", "target_thread_id")),
+        ):
+            if not isinstance(mapping, dict):
+                continue
+            for key in keys:
+                value = mapping.get(key)
+                if nonempty_string(value) and value not in values:
+                    values.append(value)
+        return values
+
+    def _legacy_root_for(self, event: dict[str, Any]) -> str | None:
+        thread_ids = self._event_thread_ids(event)
+        for thread_id in thread_ids:
+            root_thread_id = self.thread_roots.get(thread_id)
+            if root_thread_id is not None:
+                return root_thread_id
+
+        payload = event["payload"]
+        item = harness(event)
+        correlations = item.get("correlations") if item is not None else None
+        root_thread_id = self._string_from(correlations, "root_thread_id", "rootThreadId")
+        if root_thread_id is None and payload.get("type") == "rollout_started":
+            root_thread_id = self._string_from(payload, "root_thread_id", "rootThreadId")
+        if root_thread_id is not None:
+            if self.legacy_root_thread_id is None:
+                self.legacy_root_thread_id = root_thread_id
+            return root_thread_id
+
+        if self.legacy_root_thread_id is not None:
+            return self.legacy_root_thread_id
+        if thread_ids:
+            self.legacy_root_thread_id = thread_ids[0]
+            return self.legacy_root_thread_id
+        return None
+
+    def _relationship(self, event: dict[str, Any]) -> tuple[str | None, str | None]:
+        payload = event["payload"]
+        item = harness(event)
+        correlations = item.get("correlations") if item is not None else None
+        parent_thread_id = self._string_from(payload, "parent_thread_id") or self._string_from(
+            correlations,
+            "parent_thread_id",
+        )
+        child_thread_id = self._string_from(payload, "child_thread_id") or self._string_from(
+            correlations,
+            "child_thread_id",
+        )
+        return parent_thread_id, child_thread_id
+
+    def _agent_path(self, event: dict[str, Any]) -> str | None:
+        payload = event["payload"]
+        item = harness(event)
+        correlations = item.get("correlations") if item is not None else None
+        return self._string_from(payload, "agent_path") or self._string_from(
+            correlations,
+            "agent_path",
+        )
+
+    def _primary_thread_id(self, event: dict[str, Any]) -> str | None:
+        payload = event["payload"]
+        return self._string_from(event, "thread_id") or self._string_from(payload, "thread_id")
+
+    def _status_update(self, event: dict[str, Any]) -> tuple[str | None, str | None]:
+        payload = event["payload"]
+        payload_type = payload.get("type")
+        if payload_type == "thread_started":
+            return self._string_from(payload, "thread_id") or self._primary_thread_id(event), "running"
+        if payload_type == "thread_ended":
+            return self._string_from(payload, "thread_id") or self._primary_thread_id(event), self._string_from(payload, "status")
+
+        item = harness(event)
+        if (
+            item is None
+            or item.get("category") != "multi_agent"
+            or item.get("name") != "agent_status_transition"
+        ):
+            return None, None
+        correlations = item.get("correlations")
+        details = item.get("details")
+        thread_id = self._string_from(correlations, "task_thread_id", "child_thread_id")
+        status = (
+            self._string_from(item, "status", "outcome", "state")
+            or self._string_from(details, "status", "state", "to")
+        )
+        return thread_id, status
+
+    def _concurrency(self) -> dict[str, Any]:
+        active_root_thread_ids = [
+            root_thread_id
+            for root_thread_id, task in self.tasks.items()
+            if task.status not in TERMINAL_TASK_STATUSES
+        ]
+        return {
+            "activeTaskCount": len(active_root_thread_ids),
+            "activeRootThreadIds": active_root_thread_ids,
+            "maxActiveTaskCount": self.max_active_task_count,
+        }
+
+    def _event_metadata(
+        self,
+        event: dict[str, Any],
+        root_thread_id: str | None,
+    ) -> dict[str, Any]:
+        concurrency = self._concurrency()
+        if root_thread_id is None:
+            return {
+                "rootThreadId": None,
+                "scope": "session",
+                "concurrency": concurrency,
+            }
+
+        task = self.tasks[root_thread_id]
+        metadata: dict[str, Any] = {
+            "rootThreadId": root_thread_id,
+            "status": task.status,
+            "lifecycle": "ended" if task.status in TERMINAL_TASK_STATUSES else "active",
+            "concurrency": concurrency,
+        }
+        thread_id = self._primary_thread_id(event)
+        if thread_id is None:
+            return metadata
+        thread = task.threads.get(thread_id)
+        if thread is None:
+            return metadata
+        metadata["threadId"] = thread.thread_id
+        metadata["threadStatus"] = thread.status
+        if thread.parent_thread_id is not None:
+            metadata["parentThreadId"] = thread.parent_thread_id
+        if thread.agent_path is not None:
+            metadata["agentPath"] = thread.agent_path
+        return metadata
+
+    def apply(self, event: dict[str, Any]) -> dict[str, Any]:
+        declared_root, root_thread_id = task_root_identity(event)
+        if not declared_root:
+            root_thread_id = self._legacy_root_for(event)
+        if root_thread_id is None:
+            return self._event_metadata(event, None)
+
+        task = self._ensure_task(root_thread_id)
+        for thread_id in self._event_thread_ids(event):
+            self._ensure_thread(task, thread_id)
+
+        parent_thread_id, child_thread_id = self._relationship(event)
+        if parent_thread_id is not None and child_thread_id is not None:
+            self._ensure_thread(task, parent_thread_id)
+            child = self._ensure_thread(task, child_thread_id)
+            child.parent_thread_id = parent_thread_id
+
+        primary_thread_id = self._primary_thread_id(event)
+        agent_path = self._agent_path(event)
+        if primary_thread_id is not None and agent_path is not None:
+            self._ensure_thread(task, primary_thread_id).agent_path = agent_path
+
+        status_thread_id, status = self._status_update(event)
+        if status_thread_id is not None and status is not None:
+            thread = self._ensure_thread(task, status_thread_id)
+            thread.status = status
+            if status_thread_id == root_thread_id:
+                task.status = status
+
+        active_count = sum(
+            task.status not in TERMINAL_TASK_STATUSES for task in self.tasks.values()
+        )
+        self.max_active_task_count = max(self.max_active_task_count, active_count)
+        return self._event_metadata(event, root_thread_id)
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "tasks": [task.metadata() for task in self.tasks.values()],
+            "concurrency": self._concurrency(),
+        }
 
 
 def is_v2_event(item: dict[str, Any]) -> bool:
@@ -492,17 +843,17 @@ def matches(event: dict[str, Any], filters: Filters) -> bool:
     item = harness(event)
     if filters.harness_only and item is None:
         return False
-    if item is None:
-        return not any((filters.step, filters.category, filters.name, filters.phase, filters.correlations))
-    if filters.step and item.get("step_id") not in filters.step:
+    if filters.step and (item is None or item.get("step_id") not in filters.step):
         return False
-    if filters.category and item.get("category") not in filters.category:
+    if filters.category and teaching_category(event, item) not in filters.category:
         return False
-    if filters.name and item.get("name") not in filters.name:
+    event_name = item.get("name") if item is not None else payload.get("method")
+    if filters.name and event_name not in filters.name:
         return False
-    if filters.phase and item.get("phase") not in filters.phase:
+    event_phase = item.get("phase") if item is not None else payload.get("frame_kind")
+    if filters.phase and event_phase not in filters.phase:
         return False
-    correlations = item.get("correlations") or {}
+    correlations = filter_correlations(payload, item)
     return all(correlations.get(key) == value for key, value in filters.correlations)
 
 
@@ -710,15 +1061,26 @@ def payload_references(value: Any, field: str = "payload") -> list[dict[str, Any
     return unique
 
 
-def viewer_event(event: dict[str, Any], *, show_content: bool = False) -> dict[str, Any]:
+def viewer_event(
+    event: dict[str, Any],
+    *,
+    show_content: bool = False,
+    task: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = event["payload"]
     item = harness(event)
+    declared_task_root, task_root_thread_id = task_root_identity(event)
+    if task is not None and "rootThreadId" in task:
+        task_root_thread_id = task["rootThreadId"]
+    elif not declared_task_root:
+        task_root_thread_id = None
     payload_metadata: dict[str, Any] = {}
     for key, value in payload.items():
         if (key in RAW_SAFE_KEYS or key.endswith("_id")) and isinstance(
             value, (str, int, float, bool)
         ):
             payload_metadata[key] = safe_detail(value, key)
+    payload_metadata.update(app_server_metadata(payload))
     safe_event: dict[str, Any] = {
         "schema_version": event.get("schema_version"),
         "seq": event["seq"],
@@ -726,10 +1088,16 @@ def viewer_event(event: dict[str, Any], *, show_content: bool = False) -> dict[s
         "rollout_id": event.get("rollout_id"),
         "thread_id": event.get("thread_id"),
         "codex_turn_id": event.get("codex_turn_id"),
+        "task_root_thread_id": task_root_thread_id,
         "payload_type": payload["type"],
         "payload_metadata": payload_metadata,
         "payload_references": payload_references(payload),
     }
+    pairing = app_server_pairing(payload_metadata)
+    if pairing is not None:
+        safe_event["app_server_pairing"] = pairing
+    if task is not None:
+        safe_event["task"] = task
     descriptor = tool_descriptor(payload, item)
     if descriptor is not None:
         safe_event["tool"] = descriptor
@@ -751,6 +1119,20 @@ def viewer_event(event: dict[str, Any], *, show_content: bool = False) -> dict[s
             else safe_detail(item.get("details")),
         }
     return safe_event
+
+
+def task_metadata(path: Path) -> dict[str, Any]:
+    """Read the available ordered ledger into the compact task header model."""
+    ledger = TaskLedger()
+    try:
+        for event in events(path):
+            ledger.apply(event)
+    except TraceInputError:
+        # Stream delivery will surface the malformed record. Retaining the
+        # metadata accumulated before it keeps a live header useful while the
+        # writer is repaired or the viewer reports the error.
+        pass
+    return ledger.metadata()
 
 
 def manifest_metadata(path: Path, *, show_content: bool = False) -> dict[str, Any]:
@@ -792,9 +1174,11 @@ def manifest_metadata(path: Path, *, show_content: bool = False) -> dict[str, An
     for key in ("raw_event_log", "payloads_dir"):
         if isinstance(manifest.get(key), str):
             manifest[key] = safe_reference_path(manifest[key])
+    manifest.update(task_metadata(path))
     manifest["source_name"] = path.parent.name if path.name == "trace.jsonl" else path.name
     manifest["stream_mode"] = "append_only_jsonl"
     manifest["content_mode"] = "full" if show_content else "redacted"
+    manifest["full_content"] = show_content
     return manifest
 
 
@@ -852,6 +1236,7 @@ def tail_updates(
     buffered = b""
     line_number = 0
     previous_seq: int | None = None
+    task_ledger = TaskLedger()
     last_heartbeat = time.monotonic()
     while stop_event is None or not stop_event.is_set():
         try:
@@ -890,10 +1275,15 @@ def tail_updates(
                     if event is None:
                         continue
                     previous_seq = event["seq"]
+                    task = task_ledger.apply(event)
                     if event["seq"] > after_seq:
                         yield {
                             "kind": "event",
-                            "event": viewer_event(event, show_content=show_content),
+                            "event": viewer_event(
+                                event,
+                                show_content=show_content,
+                                task=task,
+                            ),
                         }
                     last_heartbeat = time.monotonic()
                 continue
@@ -923,7 +1313,7 @@ class TraceViewerHTTPServer(ThreadingHTTPServer):
         address: tuple[str, int],
         trace: Path | None,
         trace_root: Path | None = None,
-        show_content: bool = False,
+        show_content: bool = True,
     ):
         self.trace_path = trace
         self.trace_root = trace_root
@@ -1068,6 +1458,7 @@ class TraceViewerRequestHandler(BaseHTTPRequestHandler):
                             "content_mode": "full"
                             if self.viewer_server.show_content
                             else "redacted",
+                            "full_content": self.viewer_server.show_content,
                         }
                     )
                 else:
@@ -1088,7 +1479,7 @@ class TraceViewerRequestHandler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/artifact":
             if not self.viewer_server.show_content:
                 self.send_json(
-                    {"error": "artifact content is disabled; restart with --show-content"},
+                    {"error": "artifact content is disabled; restart without --redact-content"},
                     HTTPStatus.FORBIDDEN,
                 )
                 return
@@ -1112,7 +1503,7 @@ def make_viewer_server(
     port: int,
     *,
     wait_for_bundle: bool = False,
-    show_content: bool = False,
+    show_content: bool = True,
 ) -> TraceViewerHTTPServer:
     try:
         return TraceViewerHTTPServer(
@@ -1131,7 +1522,7 @@ def serve_viewer(
     port: int,
     *,
     wait_for_bundle: bool = False,
-    show_content: bool = False,
+    show_content: bool = True,
 ) -> int:
     server = make_viewer_server(
         path,
@@ -1240,10 +1631,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--thread", action="append", default=[], help="thread ID (repeatable)")
     parser.add_argument("--turn", action="append", default=[], help="Codex turn ID (repeatable)")
     parser.add_argument("--step", action="append", default=[], help="harness step ID (repeatable)")
-    parser.add_argument("--category", action="append", default=[], help="harness category (repeatable)")
-    parser.add_argument("--name", action="append", default=[], help="harness event name (repeatable)")
-    parser.add_argument("--phase", action="append", default=[], help="harness phase (repeatable)")
-    parser.add_argument("--correlation", action="append", default=[], type=parse_correlation, metavar="KEY=VALUE", help="harness correlation (repeatable)")
+    parser.add_argument("--category", action="append", default=[], help="teaching category (repeatable)")
+    parser.add_argument("--name", action="append", default=[], help="event or protocol method name (repeatable)")
+    parser.add_argument("--phase", action="append", default=[], help="event phase or frame kind (repeatable)")
+    parser.add_argument("--correlation", action="append", default=[], type=parse_correlation, metavar="KEY=VALUE", help="event correlation (repeatable)")
     parser.add_argument("--harness-only", action="store_true", help="hide ordinary raw events")
     parser.add_argument("--details", action="store_true", help="include compact, redacted harness details")
     parser.add_argument("--summary", action="store_true", help="aggregate counts and matched durations")
@@ -1257,11 +1648,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="serve the unified live viewer and tail appended events",
     )
-    parser.add_argument(
+    content_mode = parser.add_mutually_exclusive_group()
+    content_mode.add_argument(
         "--show-content",
+        dest="show_content",
         action="store_true",
-        help="send full event fields and allow bundle payloads to be opened in the local viewer",
+        help="send full event fields and allow bundle payloads to be opened (the default)",
     )
+    content_mode.add_argument(
+        "--redact-content",
+        dest="show_content",
+        action="store_false",
+        help="hide event contents and bundle payload artifacts in the local viewer",
+    )
+    parser.set_defaults(show_content=True)
     parser.add_argument(
         "--wait-for-bundle",
         action="store_true",

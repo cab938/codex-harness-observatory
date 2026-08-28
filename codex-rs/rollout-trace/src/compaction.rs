@@ -45,6 +45,7 @@ enum CompactionTraceContextState {
 #[derive(Clone, Debug)]
 struct EnabledCompactionTraceContext {
     writer: Arc<TraceWriter>,
+    task_root_thread_id: AgentThreadId,
     thread_id: AgentThreadId,
     codex_turn_id: CodexTurnId,
     compaction_id: CompactionId,
@@ -103,9 +104,30 @@ impl CompactionTraceContext {
         model: String,
         provider_name: String,
     ) -> Self {
+        Self::enabled_for_task(
+            writer,
+            thread_id.clone(),
+            thread_id,
+            codex_turn_id,
+            compaction_id,
+            model,
+            provider_name,
+        )
+    }
+
+    pub(crate) fn enabled_for_task(
+        writer: Arc<TraceWriter>,
+        task_root_thread_id: AgentThreadId,
+        thread_id: AgentThreadId,
+        codex_turn_id: CodexTurnId,
+        compaction_id: CompactionId,
+        model: String,
+        provider_name: String,
+    ) -> Self {
         Self {
             state: CompactionTraceContextState::Enabled(EnabledCompactionTraceContext {
                 writer,
+                task_root_thread_id,
                 thread_id,
                 codex_turn_id,
                 compaction_id,
@@ -156,6 +178,7 @@ impl CompactionTraceContext {
         };
 
         let event_context = RawTraceEventContext {
+            task_root_thread_id: Some(context.task_root_thread_id.clone()),
             thread_id: Some(context.thread_id.clone()),
             codex_turn_id: Some(context.codex_turn_id.clone()),
         };
@@ -277,6 +300,7 @@ fn append_with_context_best_effort(
     payload: RawTraceEventPayload,
 ) {
     let event_context = RawTraceEventContext {
+        task_root_thread_id: Some(context.task_root_thread_id.clone()),
         thread_id: Some(context.thread_id.clone()),
         codex_turn_id: Some(context.codex_turn_id.clone()),
     };

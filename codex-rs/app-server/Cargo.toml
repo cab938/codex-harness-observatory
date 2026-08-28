@@ -81,6 +81,7 @@ codex-app-server-transport = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-rollout = { workspace = true }
+codex-rollout-trace = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-thread-store = { workspace = true }

@@ -66,6 +66,12 @@ use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::state_db as rollout_state_db;
+use codex_rollout_trace::AppServerSharedRunGuard;
+use codex_rollout_trace::RolloutStatus;
+use codex_rollout_trace::WireFrameDirection;
+use codex_rollout_trace::record_app_server_frame;
+use codex_rollout_trace::register_app_server_connection;
+use codex_rollout_trace::unregister_app_server_connection;
 use codex_state::log_db;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -81,6 +87,15 @@ use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
 const SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY: &str = "Codex rebuilt its local database.";
+
+fn connection_origin_trace_label(origin: ConnectionOrigin) -> &'static str {
+    match origin {
+        ConnectionOrigin::Stdio => "stdio",
+        ConnectionOrigin::InProcess => "in_process",
+        ConnectionOrigin::WebSocket => "websocket",
+        ConnectionOrigin::RemoteControl => "remote_control",
+    }
+}
 
 mod analytics_utils;
 mod app_info;
@@ -717,6 +732,9 @@ pub async fn run_main_with_transport_options(
         ));
     }
     let installation_id = resolve_installation_id(&config.codex_home).await?;
+    // The guard is intentionally installed before transports accept work but
+    // creates no bundle until the first independent root task starts.
+    let shared_trace_run = AppServerSharedRunGuard::install_from_env_or_disabled();
     let transport_shutdown_token = CancellationToken::new();
     let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
 
@@ -976,6 +994,10 @@ pub async fn run_main_with_transport_options(
                                 writer,
                                 disconnect_sender,
                             } => {
+                                register_app_server_connection(
+                                    connection_id.to_string(),
+                                    connection_origin_trace_label(origin),
+                                );
                                 let outbound_initialized = Arc::new(AtomicBool::new(false));
                                 let outbound_experimental_api_enabled =
                                     Arc::new(AtomicBool::new(false));
@@ -1010,6 +1032,7 @@ pub async fn run_main_with_transport_options(
                                 );
                             }
                             TransportEvent::ConnectionClosed { connection_id } => {
+                                unregister_app_server_connection(&connection_id.to_string());
                                 let Some(connection_state) = connections.remove(&connection_id) else {
                                     continue;
                                 };
@@ -1033,6 +1056,11 @@ pub async fn run_main_with_transport_options(
                                 }
                             }
                             TransportEvent::IncomingMessage { connection_id, message } => {
+                                record_app_server_frame(
+                                    connection_id.to_string(),
+                                    WireFrameDirection::ClientToServer,
+                                    &message,
+                                );
                                 match message {
                                     JSONRPCMessage::Request(request) => {
                                         let Some(connection_state) = connections.get_mut(&connection_id) else {
@@ -1202,6 +1230,7 @@ pub async fn run_main_with_transport_options(
     for handle in transport_accept_handles {
         let _ = handle.await;
     }
+    shared_trace_run.finish(RolloutStatus::Completed);
 
     Ok(())
 }

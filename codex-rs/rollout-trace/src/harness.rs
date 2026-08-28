@@ -117,6 +117,7 @@ impl HarnessTraceEvent {
 pub struct HarnessEvent {
     pub seq: RawEventSeq,
     pub wall_time_unix_ms: i64,
+    pub task_root_thread_id: Option<AgentThreadId>,
     pub thread_id: Option<AgentThreadId>,
     pub codex_turn_id: Option<CodexTurnId>,
     #[serde(flatten)]
@@ -127,6 +128,7 @@ impl HarnessEvent {
     pub(crate) fn from_raw(
         seq: RawEventSeq,
         wall_time_unix_ms: i64,
+        task_root_thread_id: Option<AgentThreadId>,
         thread_id: Option<AgentThreadId>,
         codex_turn_id: Option<CodexTurnId>,
         trace: HarnessTraceEvent,
@@ -134,6 +136,7 @@ impl HarnessEvent {
         Self {
             seq,
             wall_time_unix_ms,
+            task_root_thread_id,
             thread_id,
             codex_turn_id,
             trace,
@@ -175,6 +178,7 @@ mod tests {
             metadata_payload: None,
         })?;
         let context = RawTraceEventContext {
+            task_root_thread_id: Some("thread-root".to_string()),
             thread_id: Some("thread-root".to_string()),
             codex_turn_id: Some("turn-1".to_string()),
         };
@@ -210,7 +214,7 @@ mod tests {
         })?;
 
         let reduced = replay_bundle(temp.path())?;
-        assert_eq!(reduced.schema_version, 2);
+        assert_eq!(reduced.schema_version, 3);
         assert_eq!(reduced.harness_events.len(), 1);
         let event = &reduced.harness_events[0];
         assert_eq!(event.thread_id.as_deref(), Some("thread-root"));

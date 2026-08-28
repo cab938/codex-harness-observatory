@@ -11,6 +11,7 @@
     <header class="topbar">
       <h1>Harness Observatory</h1>
       <div class="topbar-tools">
+        <span class="private-evidence" data-testid="private-evidence">Private full evidence</span>
         <div class="connection-status" data-state="connecting" data-testid="connection-status">
           <span class="status-light" aria-hidden="true"></span>
           <span id="connection-label">Connecting</span>
@@ -119,10 +120,19 @@
           </div>
         </div>
         <div id="stream-notice" class="stream-notice" hidden role="status"></div>
+        <section class="task-lane-panel" aria-labelledby="task-lane-title">
+          <div class="task-lane-heading">
+            <h3 id="task-lane-title">Task lanes</h3>
+            <span id="task-concurrency-summary">Raw sequence</span>
+          </div>
+          <div id="task-focus-controls" class="task-focus-controls" data-testid="task-focus-controls" role="group" aria-label="Task focus"></div>
+          <div id="task-tree" class="task-tree" data-testid="task-tree" aria-label="Task and child-agent relationships"></div>
+        </section>
         <div class="event-columns" aria-hidden="true">
           <span>#</span>
           <span>Time</span>
           <span>Event</span>
+          <span>Lane</span>
           <span>Type</span>
           <span>Phase</span>
         </div>

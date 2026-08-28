@@ -46,6 +46,7 @@ enum ToolDispatchTraceContextState {
 #[derive(Clone, Debug)]
 struct EnabledToolDispatchTraceContext {
     writer: Arc<TraceWriter>,
+    task_root_thread_id: AgentThreadId,
     thread_id: AgentThreadId,
     codex_turn_id: CodexTurnId,
     tool_call_id: ToolCallId,
@@ -143,13 +144,18 @@ impl ToolDispatchTraceContext {
     }
 
     /// Starts one dispatch-level lifecycle and returns the handle for its result.
-    pub(crate) fn start(writer: Arc<TraceWriter>, invocation: ToolDispatchInvocation) -> Self {
+    pub(crate) fn start(
+        writer: Arc<TraceWriter>,
+        task_root_thread_id: AgentThreadId,
+        invocation: ToolDispatchInvocation,
+    ) -> Self {
         if suppresses_tool_dispatch_trace(&invocation) {
             return Self::disabled();
         }
 
         let context = EnabledToolDispatchTraceContext {
             writer,
+            task_root_thread_id,
             thread_id: invocation.thread_id.clone(),
             codex_turn_id: invocation.codex_turn_id.clone(),
             tool_call_id: invocation.tool_call_id.clone(),
@@ -379,6 +385,7 @@ fn append_with_context_best_effort(
     payload: RawTraceEventPayload,
 ) {
     let event_context = RawTraceEventContext {
+        task_root_thread_id: Some(context.task_root_thread_id.clone()),
         thread_id: Some(context.thread_id.clone()),
         codex_turn_id: Some(context.codex_turn_id.clone()),
     };

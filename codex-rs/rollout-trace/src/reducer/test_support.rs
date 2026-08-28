@@ -99,6 +99,7 @@ pub(crate) fn trace_context_for_agent(turn_id: &str) -> RawTraceEventContext {
 
 pub(crate) fn trace_context_for_thread(thread_id: &str, turn_id: &str) -> RawTraceEventContext {
     RawTraceEventContext {
+        task_root_thread_id: Some(thread_id.to_string()),
         thread_id: Some(thread_id.to_string()),
         codex_turn_id: Some(turn_id.to_string()),
     }

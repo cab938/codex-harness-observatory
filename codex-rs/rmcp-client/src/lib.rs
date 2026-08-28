@@ -18,6 +18,7 @@ mod rmcp_client;
 mod startup_error;
 mod stdio_server_launcher;
 mod utils;
+mod wire_trace_transport;
 
 pub use auth_status::McpAuthState;
 pub use auth_status::McpLoginRequirement;

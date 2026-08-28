@@ -47,6 +47,7 @@ enum InferenceTraceContextState {
 #[derive(Clone, Debug)]
 struct EnabledInferenceTraceContext {
     writer: Arc<TraceWriter>,
+    task_root_thread_id: AgentThreadId,
     thread_id: AgentThreadId,
     codex_turn_id: CodexTurnId,
     model: String,
@@ -107,9 +108,28 @@ impl InferenceTraceContext {
         model: String,
         provider_name: String,
     ) -> Self {
+        Self::enabled_for_task(
+            writer,
+            thread_id.clone(),
+            thread_id,
+            codex_turn_id,
+            model,
+            provider_name,
+        )
+    }
+
+    pub(crate) fn enabled_for_task(
+        writer: Arc<TraceWriter>,
+        task_root_thread_id: AgentThreadId,
+        thread_id: AgentThreadId,
+        codex_turn_id: CodexTurnId,
+        model: String,
+        provider_name: String,
+    ) -> Self {
         Self {
             state: InferenceTraceContextState::Enabled(EnabledInferenceTraceContext {
                 writer,
+                task_root_thread_id,
                 thread_id,
                 codex_turn_id,
                 model,
@@ -381,6 +401,7 @@ fn append_with_context_best_effort(
     payload: RawTraceEventPayload,
 ) {
     let event_context = RawTraceEventContext {
+        task_root_thread_id: Some(context.task_root_thread_id.clone()),
         thread_id: Some(context.thread_id.clone()),
         codex_turn_id: Some(context.codex_turn_id.clone()),
     };

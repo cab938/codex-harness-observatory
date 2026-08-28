@@ -54,14 +54,38 @@ impl TraceWriter {
         rollout_id: String,
         root_thread_id: AgentThreadId,
     ) -> Result<Self> {
+        let started_at_unix_ms = unix_time_ms();
+        let manifest =
+            TraceBundleManifest::new(trace_id, rollout_id, root_thread_id, started_at_unix_ms);
+        Self::create_with_manifest(bundle_dir, manifest)
+    }
+
+    /// Creates a trace bundle owned by one shared App Server trace run.
+    pub(crate) fn create_shared_run(
+        bundle_dir: impl AsRef<Path>,
+        trace_id: String,
+        run_id: String,
+        first_task_root_thread_id: AgentThreadId,
+    ) -> Result<Self> {
+        let started_at_unix_ms = unix_time_ms();
+        let manifest = TraceBundleManifest::new_shared_run(
+            trace_id,
+            run_id,
+            first_task_root_thread_id,
+            started_at_unix_ms,
+        );
+        Self::create_with_manifest(bundle_dir, manifest)
+    }
+
+    fn create_with_manifest(
+        bundle_dir: impl AsRef<Path>,
+        manifest: TraceBundleManifest,
+    ) -> Result<Self> {
         let bundle_dir = bundle_dir.as_ref().to_path_buf();
         let payloads_dir = bundle_dir.join(PAYLOADS_DIR_NAME);
         std::fs::create_dir_all(&payloads_dir)
             .with_context(|| format!("create trace payload dir {}", payloads_dir.display()))?;
 
-        let started_at_unix_ms = unix_time_ms();
-        let manifest =
-            TraceBundleManifest::new(trace_id, rollout_id, root_thread_id, started_at_unix_ms);
         write_json_file(&bundle_dir.join(MANIFEST_FILE_NAME), &manifest)?;
 
         let event_log_path = bundle_dir.join(RAW_EVENT_LOG_FILE_NAME);
@@ -116,12 +140,23 @@ impl TraceWriter {
         context: RawTraceEventContext,
         payload: RawTraceEventPayload,
     ) -> Result<RawTraceEvent> {
+        self.append_with_context_at(context, payload, unix_time_ms())
+    }
+
+    /// Appends one raw event using a timestamp captured at an earlier boundary.
+    pub(crate) fn append_with_context_at(
+        &self,
+        context: RawTraceEventContext,
+        payload: RawTraceEventPayload,
+        wall_time_unix_ms: i64,
+    ) -> Result<RawTraceEvent> {
         let mut inner = self.lock_inner();
         let event = RawTraceEvent {
             schema_version: RAW_TRACE_EVENT_SCHEMA_VERSION,
             seq: inner.next_seq,
-            wall_time_unix_ms: unix_time_ms(),
+            wall_time_unix_ms,
             rollout_id: inner.manifest.rollout_id.clone(),
+            task_root_thread_id: context.task_root_thread_id,
             thread_id: context.thread_id,
             codex_turn_id: context.codex_turn_id,
             payload,

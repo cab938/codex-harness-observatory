@@ -51,7 +51,7 @@ pub type EdgeId = String;
 /// Reducer-owned ID for request/log correlation metadata.
 pub type CorrelationId = String;
 
-/// Canonical reduced graph for one Codex rollout.
+/// Canonical reduced graph for one Codex trace run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RolloutTrace {
     pub schema_version: u32,
@@ -61,12 +61,21 @@ pub struct RolloutTrace {
     /// names the diagnostic artifact produced for that rollout, which keeps
     /// storage/replay identity separate from the product-level session identity.
     pub trace_id: String,
-    /// CLI-visible rollout/run identity. Higher-level experiment/sample IDs wrap this object.
+    /// CLI-visible trace-run identity. Higher-level experiment/sample IDs wrap this object.
     pub rollout_id: String,
     pub started_at_unix_ms: i64,
     /// Wall-clock timestamp for terminal rollout status. `None` means running or partial trace.
     pub ended_at_unix_ms: Option<i64>,
     pub status: RolloutStatus,
+    /// Whether one App Server lifetime owns this trace across independent roots.
+    pub shared_run: bool,
+    /// Independent root tasks observed in start order.
+    ///
+    /// A child thread belongs to the task root recorded in its raw-event
+    /// envelope; connection-global App Server frames do not belong to this
+    /// collection.
+    pub task_root_thread_ids: Vec<AgentThreadId>,
+    /// Legacy compatibility anchor: the first root task in this trace run.
     pub root_thread_id: AgentThreadId,
     pub threads: BTreeMap<AgentThreadId, AgentThread>,
     pub codex_turns: BTreeMap<CodexTurnId, CodexTurn>,
@@ -99,6 +108,7 @@ impl RolloutTrace {
         rollout_id: String,
         root_thread_id: AgentThreadId,
         started_at_unix_ms: i64,
+        shared_run: bool,
     ) -> Self {
         Self {
             schema_version,
@@ -107,6 +117,8 @@ impl RolloutTrace {
             started_at_unix_ms,
             ended_at_unix_ms: None,
             status: RolloutStatus::Running,
+            shared_run,
+            task_root_thread_ids: vec![root_thread_id.clone()],
             root_thread_id,
             threads: BTreeMap::new(),
             codex_turns: BTreeMap::new(),

@@ -1,6 +1,8 @@
 //! Append-only raw trace events.
 
 use crate::HarnessTraceEvent;
+use crate::WireFrameDirection;
+use crate::WireFrameKind;
 use crate::model::AgentThreadId;
 use crate::model::CodeCellRuntimeStatus;
 use crate::model::CodexTurnId;
@@ -24,7 +26,7 @@ use serde_json::Value;
 pub type RawEventSeq = u64;
 
 /// Current raw event envelope schema version.
-pub(crate) const RAW_TRACE_EVENT_SCHEMA_VERSION: u32 = 2;
+pub(crate) const RAW_TRACE_EVENT_SCHEMA_VERSION: u32 = 4;
 
 /// One append-only raw trace event.
 ///
@@ -38,6 +40,13 @@ pub struct RawTraceEvent {
     /// Unix wall-clock timestamp in milliseconds. Use for display/latency.
     pub wall_time_unix_ms: i64,
     pub rollout_id: String,
+    /// Independent root task that owns this event's thread tree.
+    ///
+    /// A shared App Server trace can contain several independent roots. Frames
+    /// that belong to the connection/server rather than one task deliberately
+    /// leave this unset.
+    #[serde(default)]
+    pub task_root_thread_id: Option<AgentThreadId>,
     pub thread_id: Option<AgentThreadId>,
     pub codex_turn_id: Option<CodexTurnId>,
     pub payload: RawTraceEventPayload,
@@ -46,6 +55,7 @@ pub struct RawTraceEvent {
 /// Writer-supplied context that appears in the raw event envelope.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RawTraceEventContext {
+    pub task_root_thread_id: Option<AgentThreadId>,
     pub thread_id: Option<AgentThreadId>,
     pub codex_turn_id: Option<CodexTurnId>,
 }
@@ -68,13 +78,17 @@ pub enum RawToolCallRequester {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum RawTraceEventPayload {
+    /// Lifecycle start for a trace run that can span several independent task roots.
+    RunStarted { trace_id: String },
+    /// Lifecycle end for a trace run that can span several independent task roots.
+    RunEnded { status: RolloutStatus },
+    /// Legacy lifecycle start for a single-root rollout bundle.
     RolloutStarted {
         trace_id: String,
         root_thread_id: AgentThreadId,
     },
-    RolloutEnded {
-        status: RolloutStatus,
-    },
+    /// Legacy lifecycle end for a single-root rollout bundle.
+    RolloutEnded { status: RolloutStatus },
     ThreadStarted {
         thread_id: AgentThreadId,
         /// Stable agent path.
@@ -222,10 +236,44 @@ pub enum RawTraceEventPayload {
         event_type: String,
         event_payload: RawPayloadRef,
     },
-    /// Source-local transition or decision in the Codex agent harness.
-    HarnessEventObserved {
-        event: HarnessTraceEvent,
+    /// One exact JSON-RPC message at the App Server client boundary.
+    AppServerFrameObserved {
+        connection_id: String,
+        transport: String,
+        direction: WireFrameDirection,
+        frame_kind: WireFrameKind,
+        method: Option<String>,
+        request_id: Option<String>,
+        /// Existing thread targeted by this operation, when the wire frame identifies one.
+        #[serde(default)]
+        source_thread_id: Option<AgentThreadId>,
+        /// Thread introduced by a start or fork result/notification, when present.
+        #[serde(default)]
+        new_thread_id: Option<AgentThreadId>,
+        /// Conversation item carried by an item lifecycle notification, when present.
+        #[serde(default)]
+        item_id: Option<String>,
+        /// Source thread recorded by a returned forked thread, when present.
+        #[serde(default)]
+        forked_from_id: Option<AgentThreadId>,
+        /// Session tree identity recorded by a returned thread, when present.
+        #[serde(default)]
+        session_id: Option<String>,
+        frame_payload: RawPayloadRef,
     },
+    /// One exact JSON-RPC message exchanged with an MCP server.
+    McpFrameObserved {
+        server_name: String,
+        transport: String,
+        direction: WireFrameDirection,
+        frame_kind: WireFrameKind,
+        method: Option<String>,
+        request_id: Option<String>,
+        mcp_call_id: Option<McpCallId>,
+        frame_payload: RawPayloadRef,
+    },
+    /// Source-local transition or decision in the Codex agent harness.
+    HarnessEventObserved { event: HarnessTraceEvent },
     /// Structured payload for early instrumentation before a dedicated variant exists.
     Other {
         kind: String,
@@ -240,7 +288,9 @@ impl RawTraceEventPayload {
     /// Raw payload refs that must exist before this raw event is appended.
     pub(crate) fn raw_payload_refs(&self) -> Vec<&RawPayloadRef> {
         match self {
-            RawTraceEventPayload::RolloutStarted { .. }
+            RawTraceEventPayload::RunStarted { .. }
+            | RawTraceEventPayload::RunEnded { .. }
+            | RawTraceEventPayload::RolloutStarted { .. }
             | RawTraceEventPayload::RolloutEnded { .. }
             | RawTraceEventPayload::ThreadEnded { .. }
             | RawTraceEventPayload::CodexTurnStarted { .. }
@@ -275,6 +325,14 @@ impl RawTraceEventPayload {
             }
             | RawTraceEventPayload::ProtocolEventObserved {
                 event_payload: request_payload,
+                ..
+            }
+            | RawTraceEventPayload::AppServerFrameObserved {
+                frame_payload: request_payload,
+                ..
+            }
+            | RawTraceEventPayload::McpFrameObserved {
+                frame_payload: request_payload,
                 ..
             } => vec![request_payload],
             RawTraceEventPayload::HarnessEventObserved { event } => event.payloads.iter().collect(),

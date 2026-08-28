@@ -1,6 +1,6 @@
 # Codex Harness Observatory
 
-This is a research and teaching fork of the open Codex agent harness. Its purpose is to expose the local machinery that turns a task into model sampling, decisions, tool execution, approvals, and coordinated agent work. It does not attempt to expose the model's private reasoning, and it does not instrument the desktop client or app-server protocol layer.
+This is a research and teaching fork of the open Codex agent harness. Its purpose is to expose the local machinery that turns a task into App Server protocol traffic, model sampling, decisions, tool execution, approvals, MCP calls, and coordinated agent work. It does not attempt to expose the model's private reasoning or instrument the desktop renderer. The Desktop teaching route connects that renderer to this patched Core through the App Server bridge.
 
 ## Source pin
 
@@ -14,12 +14,12 @@ This repository intentionally has no Git remote. The upstream tag and commit abo
 
 ## Boundary
 
-The observatory records events inside `codex-core` and at the Core-owned boundaries to model inference, approvals, tools, sandboxes, and child agents. Existing rollout-trace request and response payloads remain the packet-level evidence. New harness events explain why Core moved from one state to another.
+The observatory records events inside `codex-core`, at the Core-owned boundaries to model inference, approvals, tools, sandboxes, and child agents, and at the App Server and MCP JSON-RPC transport boundaries. Exact requests and responses live in the existing rollout payload store. Small raw envelopes and harness events make those packets filterable and explain why Core moved from one state to another.
 
 Out of scope:
 
 - desktop UI implementation
-- app-server startup, transport, and connection mechanics
+- app-server startup and connection-management internals beyond the observed JSON-RPC frames
 - private model reasoning performed by the hosted model
 - production-grade telemetry retention or compatibility guarantees
 
@@ -40,7 +40,13 @@ Tool-bearing runs also need `codex-code-mode-host` beside the development CLI. B
 
 Set `CODEX_ROLLOUT_TRACE_ROOT` to a writable directory before running the development binary. Each root task creates a trace bundle containing `manifest.json`, `trace.jsonl`, `payloads/`, and, after reduction, `state.json`.
 
-The teaching fork adds a single `harness_event_observed` raw event family. Every event uses the same fields:
+The teaching fork adds three raw event families to the same `trace.jsonl` ledger:
+
+- `harness_event_observed` records execution and decision semantics;
+- `app_server_frame_observed` records App Server JSON-RPC requests, responses, errors, and notifications; and
+- `mcp_frame_observed` records MCP JSON-RPC requests, responses, errors, and notifications.
+
+Harness events use the following fields:
 
 - raw sequence and timestamp
 - thread and Codex turn IDs
@@ -53,12 +59,43 @@ The teaching fork adds a single `harness_event_observed` raw event family. Every
 
 This preserves one raw format: fine-grained events can be filtered directly and then reduced or aggregated for lecture views.
 
+Wire-event envelopes contain only transport, direction, frame kind, method,
+request ID, and available correlation IDs. App Server envelopes normalize
+source and new thread IDs, turn and item context, fork lineage, and session ID
+when the frame carries them. Per-connection request state lets responses inherit
+the originating method, source thread, turn, and task root without confusing a
+fork's source thread with its returned new thread. The exact JSON frame remains
+a referenced payload artifact. App Server traffic received before
+`thread/start` creates the root trace is buffered in memory and flushed into
+that root bundle in its original observed order. MCP responses inherit the
+originating request method and the bridge MCP call ID when available.
+
 The phase-two additions make four further teaching boundaries visible:
 
 - context capture, contribution provenance, prompt assembly, and compaction application;
 - hook selection, invocation, categorical effects, and stop-hook continuation;
 - V2 agent identity, residency, eviction, and reload; and
 - trace-integrity invariants for lifecycle pairing and required correlations.
+
+## Desktop shared-run teaching mode
+
+The Desktop teaching route is an opt-in use of the same App Server and rollout
+trace, not Desktop instrumentation. One App Server lifetime owns one shared
+trace bundle. Independent Desktop tasks are roots in that bundle and each row
+carries `task_root_thread_id`; spawned agents remain children of their root.
+The writer allocates one exact `seq` order across roots, and initialization or
+other not-yet-attributable App Server traffic is shown in a session lane.
+
+The Linux launcher selects this development Core with `CODEX_CLI_PATH` and uses
+the existing private Unix-socket bridge through
+`CODEX_LINUX_APP_SERVER_BRIDGE_SOCKET`. It enables
+`CODEX_ROLLOUT_TRACE_SHARED_RUN=1` and full viewer evidence for the private
+teaching session. The normal standalone TUI flow remains available. The
+detailed contract, execution work, and acceptance boundary are in
+[`DESKTOP_OBSERVATORY_PLAN.md`](DESKTOP_OBSERVATORY_PLAN.md). Desktop live
+acceptance now includes an isolated two-root shared-run capture. The remaining
+profile-specific gate for ordinary model turns and a live spawned child is
+recorded in that plan.
 
 ## Teaching capture and raw trace viewer
 
@@ -83,9 +120,16 @@ The listed directory is the trace bundle. Check its metadata-level invariants be
 ```bash
 bundle="/path/printed/by/find"
 python3 tools/trace_viewer.py "$bundle" --check
+python3 tools/lecture_2_app_server_trace_check.py "$bundle"
 ./codex-rs/target/debug/codex debug trace-reduce "$bundle"
 python3 tools/trace_viewer.py "$bundle"
 ```
+
+The Lecture 2 checker is deliberately narrower than the general integrity
+check. It accepts the prepared thread, turn, item, steer, completion, and
+persistent-fork sequence; pairs bidirectional requests and responses per
+connection; rejects a second `turn/started` after steering; and verifies the
+fork's distinct thread identity and returned lineage.
 
 The viewer accepts either a bundle directory or its `trace.jsonl`. It streams writer-assigned `seq` order and never writes a derived file. It includes ordinary packet/lifecycle rows alongside `harness_event_observed` rows by default. Useful focused views include:
 
@@ -99,6 +143,15 @@ python3 tools/trace_viewer.py "$bundle" --category multi_agent --correlation chi
 
 # Aggregate upward. Durations are only matched opening-to-terminal pairs.
 python3 tools/trace_viewer.py "$bundle" --summary
+
+# Lecture 2: App Server JSON-RPC packets.
+python3 tools/trace_viewer.py "$bundle" --category app_server
+
+# Lecture 3: Codex tool execution plus MCP request/response frames.
+python3 tools/trace_viewer.py "$bundle" --category tool --category mcp
+
+# Lecture 4: execution and decision events around approvals and sandboxing.
+python3 tools/trace_viewer.py "$bundle" --category tool --category decision
 ```
 
 Use `--payload-type`, `--thread`, `--turn`, `--step`, `--category`, `--name`, and `--phase` as repeatable filters; `--correlation KEY=VALUE` is repeatable too. `--details` adds compact, redacted structured harness details. `--help` describes exit codes: `0` means one or more matched events, `1` means no match, and `2` means malformed or unreadable input.
@@ -113,15 +166,15 @@ Launch the same tool in browser mode:
 python3 tools/trace_viewer.py "$bundle" --serve
 ```
 
-The server binds to `127.0.0.1:8765` by default; use `--port 0` to select a free port. It sends existing rows and then tails appended JSONL records over one server-sent event stream in writer-assigned order. The fixed header shows manifest and stream metadata. The interface can filter on raw type, thread, turn, step, category, harness event or human-readable tool name, phase, and correlation key/value; pause and resume without dropping received rows; toggle follow-live; and open any event for detail. Malformed appended lines become visible stream errors.
+The server binds to `127.0.0.1:8765` by default; use `--port 0` to select a free port. It sends existing rows and then tails appended JSONL records over one server-sent event stream in writer-assigned order. The fixed header shows manifest and stream metadata. The interface can filter on raw type, thread, turn, step, additive teaching categories, harness event, protocol method, human-readable tool name, phase or frame kind, and correlation key/value; pause and resume without dropping received rows; toggle follow-live; and open any event for detail. App Server rows label their paired request or response and highlight the counterpart when either row is selected, including server-initiated requests. Select `App Server` for Lecture 2, `Tool + MCP` for Lecture 3, and `Tool + Decision` for Lecture 4. Malformed appended lines become visible stream errors.
 
-Browser mode remains redacted unless `--show-content` is supplied. In full-content mode the browser receives complete raw event fields, and each payload reference is a button that opens the stored artifact below the event. Tool-call IDs are correlated across related decisions and lifecycle rows so that the timeline says `apply_patch`, `exec_command`, or the relevant MCP/code-mode tool when Core recorded that identity. An `apply_patch` invocation also gets a dedicated view of the affected files and patch text, labeled explicitly as Codex's internal patch machinery rather than a shell or MCP call.
+Browser mode exposes full evidence by default. Use `--redact-content` only when a metadata-only view is explicitly wanted. In full-content mode the browser receives complete raw event fields, and each payload reference is a button that opens the stored artifact below the event. This includes exact App Server and MCP frames, which can contain prompts, tool arguments, paths, and server-returned content. Tool-call IDs are correlated across related decisions and lifecycle rows so that the timeline says `apply_patch`, `exec_command`, or the relevant MCP/code-mode tool when Core recorded that identity. An `apply_patch` invocation also gets a dedicated view of the affected files and patch text, labeled explicitly as Codex's internal patch machinery rather than a shell or MCP call.
 
-The checked-in `run.sh` enables full-content mode by default through `OBSERVATORY_SHOW_CONTENT=1` in `.env`. This is intentional for the private teaching environment. Set it to `0` to return the live viewer to metadata-only mode, or invoke the viewer directly for either mode:
+The checked-in `run.sh` enables full-content mode by default through `OBSERVATORY_SHOW_CONTENT=1` in `.env`. This is intentional for the private teaching environment. Set it to `0` to make the TUI route metadata-only; Desktop teaching mode remains full evidence. Invoke the viewer directly for either mode:
 
 ```bash
-python3 tools/trace_viewer.py "$bundle" --serve --show-content
 python3 tools/trace_viewer.py "$bundle" --serve
+python3 tools/trace_viewer.py "$bundle" --serve --redact-content
 ```
 
 For a deterministic no-cloud demonstration, run the checked-in synthetic trace:
@@ -129,6 +182,7 @@ For a deterministic no-cloud demonstration, run the checked-in synthetic trace:
 ```bash
 python3 tools/trace_viewer.py tools/tests/fixtures/teaching_trace.jsonl
 python3 tools/trace_viewer.py tools/tests/fixtures/teaching_trace.jsonl --summary --harness-only
+python3 tools/lecture_2_app_server_trace_check.py tools/tests/fixtures/lecture_2_app_server_trace
 ```
 
 > **Private teaching mode:** `run.sh` deliberately exposes prompts, responses, tool arguments/results, paths, and other stored payload content in the local viewer. This makes the agent loop legible for demonstration, but a captured bundle still contains everything shown. Do not reuse this full-content setting for ordinary work or publish a bundle without reviewing it.
@@ -139,7 +193,13 @@ The integrated fork was checked with focused package tests and private synthetic
 
 - `cargo build -j 1 -p codex-cli` completed, and the development binary reports `codex-cli 0.149.0`;
 - five focused Core tests passed for context provenance, V2 eviction/reload, hook effects, and stop supervision;
-- `python3 -m unittest tools.tests.test_trace_viewer` passed 18 tests for timeline/filter/summary behavior, integrity rules, tailing, redaction, full-content delivery, artifact retrieval, HTTP metadata, and malformed input;
+- focused rollout-trace, RMCP, and App Server tests passed for exact frame persistence, request/response correlation, typed MCP `_meta` propagation, and unchanged filtered routing;
+- `just test -p codex-rollout-trace` passed all 69 focused crate tests,
+  including normalized App Server identities, bidirectional response context,
+  persistent fork lineage, and shared-run ordering;
+- `python3 -m unittest tools.tests.test_trace_viewer` passed 25 tests for timeline/filter/summary behavior, integrity rules, wire-frame filtering and pairing, tailing, redaction, full-content delivery, artifact retrieval, HTTP metadata, and malformed input;
+- the three Lecture 2 checker tests passed, and its deterministic fixture was
+  accepted from both its bundle directory and command-line entry point;
 - `node --check tools/trace_viewer_web/app.js` and `git diff --check` passed before the final formatter pass;
 - a private live patch run produced 81 raw events, including 60 harness events, changed the synthetic file, and passed `--check`;
 - a private live V2 spawn/wait run produced 140 raw events, including `agent_residency` and `agent_identity`, and passed `--check`; and

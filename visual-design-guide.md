@@ -81,6 +81,7 @@ Show a status only when it is current, can vary, and changes how the user should
 - Lead each event with the human-readable event or tool name. Do not make an opaque identifier the primary label.
 - Keep sequence, time, type, phase, and meaningful status aligned so events can be compared vertically.
 - Treat displayed event categories as a changeable teaching layer over the recorded trace vocabulary. Preserve the original Core category in the raw event evidence.
+- Keep protocol and semantic layers visually distinct: App Server uses slate blue, tools use blue, MCP uses teal, and decisions use amber, always alongside their text category.
 - Show thread, turn, step, call, and response identifiers on demand unless an identifier is needed to follow a relationship.
 - Explain the semantic meaning of an event once. Keep the complete event envelope and payload artifacts available as evidence.
 - Do not repeat envelope fields in the semantic view unless they support interpretation, correlation, or comparison.

@@ -36,6 +36,7 @@ enum CodeCellTraceContextState {
 #[derive(Clone, Debug)]
 struct EnabledCodeCellTraceContext {
     writer: Arc<TraceWriter>,
+    task_root_thread_id: AgentThreadId,
     thread_id: AgentThreadId,
     codex_turn_id: CodexTurnId,
     runtime_cell_id: String,
@@ -63,6 +64,7 @@ impl CodeCellTraceContext {
     /// Builds a context for an already-known code-mode runtime cell.
     pub(crate) fn enabled(
         writer: Arc<TraceWriter>,
+        task_root_thread_id: impl Into<AgentThreadId>,
         thread_id: impl Into<AgentThreadId>,
         codex_turn_id: impl Into<CodexTurnId>,
         runtime_cell_id: impl Into<String>,
@@ -70,6 +72,7 @@ impl CodeCellTraceContext {
         Self {
             state: CodeCellTraceContextState::Enabled(EnabledCodeCellTraceContext {
                 writer,
+                task_root_thread_id: task_root_thread_id.into(),
                 thread_id: thread_id.into(),
                 codex_turn_id: codex_turn_id.into(),
                 runtime_cell_id: runtime_cell_id.into(),
@@ -176,6 +179,7 @@ fn append_with_context_best_effort(
     payload: RawTraceEventPayload,
 ) {
     let event_context = RawTraceEventContext {
+        task_root_thread_id: Some(context.task_root_thread_id.clone()),
         thread_id: Some(context.thread_id.clone()),
         codex_turn_id: Some(context.codex_turn_id.clone()),
     };

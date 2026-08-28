@@ -19,6 +19,7 @@ use crate::bundle::TraceBundleManifest;
 use crate::model::ExecutionStatus;
 use crate::model::RolloutTrace;
 use crate::payload::RawPayloadRef;
+use crate::raw_event::RAW_TRACE_EVENT_SCHEMA_VERSION;
 use crate::raw_event::RawTraceEvent;
 use crate::raw_event::RawTraceEventPayload;
 
@@ -53,6 +54,7 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
             manifest.rollout_id,
             manifest.root_thread_id,
             manifest.started_at_unix_ms,
+            manifest.shared_run,
         ),
         bundle_dir: bundle_dir.to_path_buf(),
         next_conversation_item_ordinal: 1,
@@ -63,6 +65,10 @@ pub fn replay_bundle(bundle_dir: impl AsRef<Path>) -> Result<RolloutTrace> {
         pending_code_cell_starts: BTreeMap::new(),
         pending_code_cell_lifecycle_events: BTreeMap::new(),
         pending_agent_interaction_edges: Vec::new(),
+        next_raw_event_seq: 1,
+        run_started_seen: false,
+        run_ended_seen: false,
+        task_roots_by_thread_id: BTreeMap::new(),
     };
 
     let event_log_path = bundle_dir.join(RAW_EVENT_LOG_FILE_NAME);
@@ -133,6 +139,16 @@ struct TraceReducer {
     /// as a `ConversationItem`, so the reducer keeps the delivery edge pending until it can point
     /// at the exact model-visible item instead of a coarse thread.
     pending_agent_interaction_edges: Vec<PendingAgentInteractionEdge>,
+    /// Next contiguous raw sequence number expected from the one writer.
+    next_raw_event_seq: u64,
+    /// Shared and standalone lifecycle starts are optional only for legacy
+    /// hand-assembled fixtures, but never repeat within a real bundle.
+    run_started_seen: bool,
+    /// A trace may be replayed while running, so no terminal event is required.
+    /// When one exists, the run authority may emit it only once.
+    run_ended_seen: bool,
+    /// Task root inherited by every started thread in a shared run.
+    task_roots_by_thread_id: BTreeMap<String, String>,
 }
 
 impl TraceReducer {
@@ -147,6 +163,8 @@ impl TraceReducer {
     }
 
     fn apply_event(&mut self, event: RawTraceEvent) -> Result<()> {
+        self.validate_event_envelope(&event)?;
+        let task_root_thread_id = event.task_root_thread_id.clone();
         // Raw payload refs are reducer-wide evidence, not owned by a single
         // semantic arm. Keep this bookkeeping separate so typed reduction can
         // stay strict without duplicating payload insertion in every case.
@@ -155,12 +173,30 @@ impl TraceReducer {
         }
 
         match event.payload {
+            RawTraceEventPayload::RunStarted { trace_id } => {
+                self.rollout.trace_id = trace_id;
+                self.rollout.shared_run = true;
+            }
+            RawTraceEventPayload::RunEnded { status } => {
+                self.rollout.status = status;
+                self.rollout.ended_at_unix_ms = Some(event.wall_time_unix_ms);
+            }
             RawTraceEventPayload::RolloutStarted {
                 trace_id,
                 root_thread_id,
             } => {
                 self.rollout.trace_id = trace_id;
                 self.rollout.root_thread_id = root_thread_id;
+                self.rollout.shared_run = false;
+                if !self
+                    .rollout
+                    .task_root_thread_ids
+                    .contains(&self.rollout.root_thread_id)
+                {
+                    self.rollout
+                        .task_root_thread_ids
+                        .push(self.rollout.root_thread_id.clone());
+                }
             }
             RawTraceEventPayload::RolloutEnded { status } => {
                 self.rollout.status = status;
@@ -171,12 +207,19 @@ impl TraceReducer {
                 agent_path,
                 metadata_payload,
             } => {
+                let started_thread_id = thread_id.clone();
+                let event_thread_id = event.thread_id.clone();
                 self.start_thread(
                     event.seq,
                     event.wall_time_unix_ms,
                     thread_id,
                     agent_path,
                     metadata_payload,
+                )?;
+                self.register_task_root_for_thread(
+                    task_root_thread_id,
+                    event_thread_id,
+                    started_thread_id,
                 )?;
             }
             RawTraceEventPayload::ThreadEnded { thread_id, status } => {
@@ -231,7 +274,9 @@ impl TraceReducer {
             | RawTraceEventPayload::InferenceCancelled { .. }) => {
                 self.complete_inference_call(event.seq, event.wall_time_unix_ms, payload)?;
             }
-            RawTraceEventPayload::ProtocolEventObserved { .. } => {
+            RawTraceEventPayload::ProtocolEventObserved { .. }
+            | RawTraceEventPayload::AppServerFrameObserved { .. }
+            | RawTraceEventPayload::McpFrameObserved { .. } => {
                 // Protocol wrappers are raw debug breadcrumbs. Typed hooks own
                 // the reduced graph, so these payload refs are retained without
                 // creating semantic objects.
@@ -244,6 +289,7 @@ impl TraceReducer {
                     .push(crate::HarnessEvent::from_raw(
                         event.seq,
                         event.wall_time_unix_ms,
+                        event.task_root_thread_id,
                         event.thread_id,
                         event.codex_turn_id,
                         harness_event,
@@ -496,5 +542,137 @@ impl TraceReducer {
         self.rollout
             .raw_payloads
             .insert(payload.raw_payload_id.clone(), payload.clone());
+    }
+
+    fn validate_event_envelope(&mut self, event: &RawTraceEvent) -> Result<()> {
+        if event.schema_version == 0 || event.schema_version > RAW_TRACE_EVENT_SCHEMA_VERSION {
+            bail!(
+                "unsupported raw trace event schema version {} at seq {}",
+                event.schema_version,
+                event.seq
+            );
+        }
+        if event.rollout_id != self.rollout.rollout_id {
+            bail!(
+                "raw trace event seq {} belongs to rollout {}, expected {}",
+                event.seq,
+                event.rollout_id,
+                self.rollout.rollout_id
+            );
+        }
+        if event.seq != self.next_raw_event_seq {
+            bail!(
+                "raw trace event sequence is not contiguous: expected {}, found {}",
+                self.next_raw_event_seq,
+                event.seq
+            );
+        }
+        self.next_raw_event_seq += 1;
+
+        match &event.payload {
+            RawTraceEventPayload::RunStarted { .. }
+            | RawTraceEventPayload::RolloutStarted { .. } => {
+                if self.run_started_seen {
+                    bail!("duplicate trace run start event at seq {}", event.seq);
+                }
+                self.run_started_seen = true;
+            }
+            RawTraceEventPayload::RunEnded { .. } | RawTraceEventPayload::RolloutEnded { .. } => {
+                if self.run_ended_seen {
+                    bail!("duplicate trace run end event at seq {}", event.seq);
+                }
+                self.run_ended_seen = true;
+            }
+            _ => {}
+        }
+
+        let Some(thread_id) = event.thread_id.as_deref() else {
+            return Ok(());
+        };
+        let Some(expected_task_root_thread_id) = self.task_roots_by_thread_id.get(thread_id) else {
+            return Ok(());
+        };
+        match event.task_root_thread_id.as_deref() {
+            Some(task_root_thread_id) if task_root_thread_id == expected_task_root_thread_id => {
+                Ok(())
+            }
+            Some(task_root_thread_id) => bail!(
+                "raw trace event seq {} used task root {} for thread {}, expected {}",
+                event.seq,
+                task_root_thread_id,
+                thread_id,
+                expected_task_root_thread_id
+            ),
+            None if matches!(
+                &event.payload,
+                RawTraceEventPayload::AppServerFrameObserved { .. }
+                    | RawTraceEventPayload::McpFrameObserved { .. }
+            ) =>
+            {
+                Ok(())
+            }
+            // Schema versions before task-root attribution and hand-built
+            // fixtures remain replayable. New production contexts populate it.
+            None => Ok(()),
+        }
+    }
+
+    fn register_task_root_for_thread(
+        &mut self,
+        task_root_thread_id: Option<String>,
+        event_thread_id: Option<String>,
+        started_thread_id: String,
+    ) -> Result<()> {
+        if let Some(event_thread_id) = event_thread_id
+            && event_thread_id != started_thread_id
+        {
+            bail!(
+                "thread start payload used {started_thread_id}, but its event envelope used {event_thread_id}"
+            );
+        }
+        let Some(task_root_thread_id) = task_root_thread_id else {
+            return Ok(());
+        };
+        let thread = self
+            .rollout
+            .threads
+            .get(&started_thread_id)
+            .with_context(|| format!("missing started thread {started_thread_id}"))?;
+        match &thread.origin {
+            crate::model::AgentOrigin::Root => {
+                if task_root_thread_id != started_thread_id {
+                    bail!("root thread {started_thread_id} used task root {task_root_thread_id}");
+                }
+            }
+            crate::model::AgentOrigin::Spawned {
+                parent_thread_id, ..
+            } => {
+                let parent_task_root_thread_id = self
+                    .task_roots_by_thread_id
+                    .get(parent_thread_id)
+                    .with_context(|| {
+                        format!(
+                            "spawned thread {started_thread_id} started before parent {parent_thread_id} had task-root attribution"
+                        )
+                    })?;
+                if task_root_thread_id != *parent_task_root_thread_id {
+                    bail!(
+                        "spawned thread {started_thread_id} used task root {task_root_thread_id}, but parent {parent_thread_id} uses {parent_task_root_thread_id}"
+                    );
+                }
+            }
+        }
+        if !self
+            .rollout
+            .task_root_thread_ids
+            .contains(&task_root_thread_id)
+        {
+            self.rollout
+                .task_root_thread_ids
+                .push(task_root_thread_id.clone());
+        }
+        self.task_roots_by_thread_id
+            .insert(started_thread_id, task_root_thread_id);
+        Ok(())
     }
 }

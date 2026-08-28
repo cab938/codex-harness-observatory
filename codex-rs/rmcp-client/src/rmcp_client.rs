@@ -56,6 +56,7 @@ use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::transport::AuthorizationManager;
 use rmcp::transport::StreamableHttpClientTransport;
+use rmcp::transport::async_rw::AsyncRwTransport;
 use rmcp::transport::auth::AuthClient;
 use rmcp::transport::auth::AuthError;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -91,6 +92,7 @@ use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
 use crate::stdio_server_launcher::StdioServerTransport;
 use crate::utils::build_default_headers;
+use crate::wire_trace_transport::WireTraceTransport;
 use codex_config::types::OAuthCredentialsStoreMode;
 
 #[path = "streamable_http_retry.rs"]
@@ -368,12 +370,19 @@ pub struct RmcpClient {
     initialize_context: Mutex<Option<InitializeContext>>,
     session_recovery_lock: Semaphore,
     elicitation_pause_state: ElicitationPauseState,
+    observatory_server_name: Option<String>,
 }
 
 impl RmcpClient {
     /// Returns the protocol compatibility policy captured when this client was created.
     pub fn protocol_mode(&self) -> McpProtocolMode {
         self.protocol_mode
+    }
+
+    /// Supplies the configured MCP server name used in local observatory traces.
+    pub fn with_observatory_server_name(mut self, server_name: impl Into<String>) -> Self {
+        self.observatory_server_name = Some(server_name.into());
+        self
     }
 
     pub async fn new_in_process_client(
@@ -394,6 +403,7 @@ impl RmcpClient {
             initialize_context: Mutex::new(None),
             session_recovery_lock: Semaphore::new(/*permits*/ 1),
             elicitation_pause_state: ElicitationPauseState::new(),
+            observatory_server_name: None,
         })
     }
 
@@ -467,6 +477,7 @@ impl RmcpClient {
             initialize_context: Mutex::new(None),
             session_recovery_lock: Semaphore::new(/*permits*/ 1),
             elicitation_pause_state: ElicitationPauseState::new(),
+            observatory_server_name: None,
         })
     }
 
@@ -566,6 +577,7 @@ impl RmcpClient {
             initialize_context: Mutex::new(None),
             session_recovery_lock: Semaphore::new(/*permits*/ 1),
             elicitation_pause_state: ElicitationPauseState::new(),
+            observatory_server_name: Some(server_name.to_string()),
         })
     }
 
@@ -1179,22 +1191,54 @@ impl RmcpClient {
             TransportRecipe::InProcess { .. } | TransportRecipe::Stdio { .. } => None,
         };
         let lifecycle = self.protocol_mode.client_lifecycle();
+        let observatory_server_name =
+            self.observatory_server_name
+                .clone()
+                .unwrap_or_else(|| match &self.transport_recipe {
+                    TransportRecipe::InProcess { .. } => "in_process".to_string(),
+                    TransportRecipe::Stdio { .. } => "stdio_server".to_string(),
+                    TransportRecipe::StreamableHttp { server_name, .. } => server_name.clone(),
+                });
         let (transport, oauth_persistor) = match pending_transport {
-            PendingTransport::InProcess { transport } => (
-                client_service
-                    .serve_with_lifecycle(transport, lifecycle)
-                    .boxed(),
-                None,
-            ),
+            PendingTransport::InProcess { transport } => {
+                let (reader, writer) = tokio::io::split(transport);
+                (
+                    client_service
+                        .serve_with_lifecycle(
+                            WireTraceTransport::new(
+                                AsyncRwTransport::<RoleClient, _, _>::new_client(reader, writer),
+                                observatory_server_name.clone(),
+                                "in_process",
+                            ),
+                            lifecycle,
+                        )
+                        .boxed(),
+                    None,
+                )
+            }
             PendingTransport::Stdio { transport } => (
                 client_service
-                    .serve_with_lifecycle(*transport, lifecycle)
+                    .serve_with_lifecycle(
+                        WireTraceTransport::new(
+                            *transport,
+                            observatory_server_name.clone(),
+                            "stdio",
+                        ),
+                        lifecycle,
+                    )
                     .boxed(),
                 None,
             ),
             PendingTransport::StreamableHttp { transport } => (
                 client_service
-                    .serve_with_lifecycle(capture_event_notifications(transport), lifecycle)
+                    .serve_with_lifecycle(
+                        capture_event_notifications(WireTraceTransport::new(
+                            transport,
+                            observatory_server_name.clone(),
+                            "streamable_http",
+                        )),
+                        lifecycle,
+                    )
                     .boxed(),
                 None,
             ),
@@ -1203,13 +1247,27 @@ impl RmcpClient {
                 oauth_persistor,
             } => (
                 client_service
-                    .serve_with_lifecycle(transport, lifecycle)
+                    .serve_with_lifecycle(
+                        WireTraceTransport::new(
+                            transport,
+                            observatory_server_name.clone(),
+                            "streamable_http_oauth",
+                        ),
+                        lifecycle,
+                    )
                     .boxed(),
                 Some(oauth_persistor),
             ),
             PendingTransport::StreamableHttpWithAccessTokenOnly { transport } => (
                 client_service
-                    .serve_with_lifecycle(transport, lifecycle)
+                    .serve_with_lifecycle(
+                        WireTraceTransport::new(
+                            transport,
+                            observatory_server_name,
+                            "streamable_http_access_token",
+                        ),
+                        lifecycle,
+                    )
                     .boxed(),
                 None,
             ),
