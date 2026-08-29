@@ -383,9 +383,11 @@ Focused verification:
 
 - deterministic viewer tests plus one browser interaction cover focus, live
   interleaving, child nesting, and full payload selection; and
-- isolated Desktop acceptance starts two independent tasks plus one child and
-  retains one shared bundle. Do not mark this tranche complete until that live
-  capture succeeds.
+- isolated disposable-profile Desktop acceptance proves the exact pinned Core
+  handshake and viewer launch; then an explicitly authorized normal-profile
+  acceptance must start two independent tasks plus one child and retain one
+  shared bundle. Do not mark this tranche complete until that account-backed
+  live capture succeeds.
 
 ## Verification budget
 

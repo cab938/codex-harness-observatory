@@ -320,7 +320,15 @@ wait_for_service() {
       return 1
     fi
     if curl --fail --silent --show-error --max-time 1 "$ready_url" >/dev/null 2>&1; then
-      return 0
+      # The port may already belong to an unrelated service. Give the process
+      # we just launched a chance to report its bind failure before accepting
+      # another server's successful response as readiness.
+      sleep 0.1
+      if kill -0 "$process_id" >/dev/null 2>&1; then
+        return 0
+      fi
+      show_startup_failure "$label" "$log_file"
+      return 1
     fi
     sleep 0.1
   done

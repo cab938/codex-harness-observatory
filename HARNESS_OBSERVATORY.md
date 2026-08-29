@@ -102,7 +102,8 @@ teaching session. The normal standalone TUI flow remains available. The
 detailed contract, execution work, and acceptance boundary are in
 [`DESKTOP_OBSERVATORY_PLAN.md`](DESKTOP_OBSERVATORY_PLAN.md). The current Core
 pin exactly matches the signed Desktop payload that will be used for teaching;
-normal-profile live acceptance is recorded in that plan.
+an isolated disposable-profile handshake is complete, and the remaining
+normal-profile authorization boundary is recorded in that plan.
 
 ## Teaching capture and raw trace viewer
 
@@ -215,6 +216,12 @@ The integrated fork was checked with focused package tests and private synthetic
 - a private live patch run produced 81 raw events, including 60 harness events, changed the synthetic file, and passed `--check`;
 - a private live V2 spawn/wait run produced 140 raw events, including `agent_residency` and `agent_identity`, and passed `--check`; and
 - an isolated headless browser received 34 initial fixture events, showed Guardian rows as decisions while naming their `apply_patch` relation, opened `payloads/tool-input.json` into a dedicated internal-patch view, and opened `payloads/request.json` to show the exact synthetic user prompt.
+- the signed Desktop candidate opened on isolated X11 display `:93`, reported
+  App Server `0.150.0-alpha.12.2`, completed its initialization handshake, and
+  served the full-evidence Observatory viewer on a separately verified port;
+  the disposable profile correctly stopped at sign-in; and
+- an occupied-port check proved that `run.sh` now reports the viewer's bind
+  failure instead of accepting an unrelated local HTTP service as ready.
 
 `just fix -p codex-core`, `just fix -p codex-app-server`, and `just fmt`
 completed. The formatter used a temporary writable uv cache because the host's

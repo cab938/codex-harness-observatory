@@ -105,10 +105,11 @@ side-by-side Desktop launcher are implemented.
 
 Measured acceptance on 2026-08-28:
 
-- `codex-rollout-trace` passed 64 focused tests, including overlapping roots,
+- `codex-rollout-trace` passed 70 focused tests, including overlapping roots,
   child attachment, exact sequence ordering, and one terminal shared-run event;
-- the viewer backend passed 24 focused tests, and browser interaction confirmed
-  task focus, child nesting, full artifact access, and no console errors;
+- the combined viewer and Lecture 2 backend suite passed 28 tests, and browser
+  interaction confirmed task focus, child nesting, full artifact access, and
+  no console errors;
 - the original Desktop socket acceptance passed all 41 focused tests against
   the patched Core, and the current development binary now reports
   `codex-cli 0.150.0-alpha.12.2`;
@@ -116,6 +117,13 @@ Measured acceptance on 2026-08-28:
   `a9802304f60ab14c0b07e3ee0db9a9c105ab0cb3`, exactly matching the bundled
   Core in signed Desktop package `26.825.32147` (SHA-256
   `986d38b690dd0310933ce61175b09c27434001f4e114332bb0f7b6ffdc3ca406`);
+- the signed candidate opened on isolated X11 display `:93` with a disposable
+  unauthenticated profile, connected through the private socket, reported App
+  Server `0.150.0-alpha.12.2`, and completed the initialization handshake;
+- retained run `personal/observatory-runs/run-20260828-202045.eGufqk`
+  contains the matching Desktop and viewer logs. No trace bundle was expected,
+  because the disposable profile stopped at the sign-in screen before a root
+  task was created;
 - two independent protocol-level Desktop roots were loaded concurrently. The
   live viewer reported two active task lanes in one full-evidence bundle;
 - the retained native run at
@@ -125,12 +133,17 @@ Measured acceptance on 2026-08-28:
 - the ordinary TUI launcher started its App Server and full-evidence viewer and
   shut both down cleanly with a disposable `CODEX_HOME`.
 
-The earlier normal-profile failure was a version boundary: signed Desktop and
-its bundled `codex-app-tools@openai-bundled` payload were newer than the prior
-`0.149.0` open Core. The source, binary, and Desktop artifact are now pinned as
-one exact set. The launcher does not edit the user's profile or disable the
-bundled plugin. A normal-profile live parent/child acceptance is the remaining
-gate before this tranche is marked complete.
+The earlier normal-profile failure was consistent with a version boundary:
+signed Desktop and its bundled `codex-app-tools@openai-bundled` payload were
+newer than the prior `0.149.0` open Core. The identified mismatch is now
+removed by pinning the source, binary, and Desktop artifact as one exact set.
+The launcher does not edit the user's profile or disable the bundled plugin.
+
+A normal-profile live model turn and Desktop-spawned child remain the final
+acceptance gate. That run can read and transmit stored account and profile
+state, so it was not performed without explicit operator authorization after
+that consequence was disclosed. The disposable-profile handshake does not
+substitute for this final account-backed check.
 
 The Desktop route is intentionally Linux-specific because it uses the existing
 Linux socket feature. The Core and trace changes remain platform-neutral; no
