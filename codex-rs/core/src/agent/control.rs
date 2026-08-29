@@ -12,18 +12,19 @@ use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::config::RolloutBudgetConfig;
+use crate::context::SubagentNotification;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
 use crate::session::multi_agents::ResolvedMultiAgentV2UsageHints;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
-use crate::session_prefix::format_subagent_notification_message;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadIdGenerator;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_manager::default_thread_id_generator;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
+use crate::turn_timing::now_unix_timestamp_ms;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
@@ -33,11 +34,17 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::items::SubAgentActivityItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
@@ -45,6 +52,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::turn_input::CyberAccessProgram;
 use codex_protocol::user_input::UserInput;
 use codex_rollout_trace::HARNESS_CATEGORY_MULTI_AGENT;
 use codex_rollout_trace::HarnessTraceEvent;
@@ -68,6 +76,7 @@ mod execution;
 mod legacy;
 mod residency;
 mod spawn;
+mod user_authorization;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SpawnAgentForkMode {
@@ -84,6 +93,7 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) root_turn_id: Option<String>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) multi_agent_v2_usage_hints: Option<ResolvedMultiAgentV2UsageHints>,
+    pub(crate) cyber_access_program: Option<CyberAccessProgram>,
 }
 
 #[derive(Clone, Debug)]
@@ -178,19 +188,12 @@ impl AgentControl {
         &self,
         agent_id: ThreadId,
         input: Vec<UserInput>,
-        parent_turn_id: Option<String>,
-        root_turn_id: Option<String>,
+        start_options: TurnStartOptions,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         let result = match thread
-            .start_or_steer_turn(
-                TurnInputRequest::user_input(input).on_start(TurnStartOptions {
-                    parent_turn_id,
-                    root_turn_id,
-                    ..Default::default()
-                }),
-            )
+            .start_or_steer_turn(TurnInputRequest::user_input(input).on_start(start_options))
             .await
         {
             Ok(TurnInputSubmission::Started { turn_id }) => Ok(turn_id),
@@ -215,8 +218,7 @@ impl AgentControl {
         agent_id: ThreadId,
         communication: InterAgentCommunication,
         agent_communication_context: AgentCommunicationContext,
-        parent_turn_id: Option<String>,
-        root_turn_id: Option<String>,
+        start_options: TurnStartOptions,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
         if communication.trigger_turn {
@@ -229,10 +231,58 @@ impl AgentControl {
             &state,
             communication,
             agent_communication_context,
-            parent_turn_id,
-            root_turn_id,
+            start_options,
         )
         .await
+    }
+
+    pub(crate) async fn emit_sub_agent_activity(
+        &self,
+        thread_id: ThreadId,
+        turn_id: String,
+        item: SubAgentActivityItem,
+    ) -> CodexResult<()> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(thread_id).await?;
+        let started_at_ms = now_unix_timestamp_ms();
+        let item = TurnItem::SubAgentActivity(item);
+        thread
+            .session
+            .send_event_raw(Event {
+                id: turn_id.clone(),
+                msg: EventMsg::ItemStarted(ItemStartedEvent {
+                    thread_id,
+                    turn_id: turn_id.clone(),
+                    item: item.clone(),
+                    started_at_ms,
+                }),
+            })
+            .await;
+        let completed_at_ms = now_unix_timestamp_ms();
+        let completed = ItemCompletedEvent {
+            thread_id,
+            turn_id: turn_id.clone(),
+            item,
+            started_at_ms: Some(started_at_ms),
+            completed_at_ms,
+        };
+        thread
+            .session
+            .send_event_raw(Event {
+                id: turn_id.clone(),
+                msg: EventMsg::ItemCompleted(completed.clone()),
+            })
+            .await;
+        for legacy in completed.as_legacy_events(/*show_raw_agent_reasoning*/ false) {
+            thread
+                .session
+                .send_event_raw(Event {
+                    id: turn_id.clone(),
+                    msg: legacy,
+                })
+                .await;
+        }
+        Ok(())
     }
 
     async fn send_inter_agent_communication_after_capacity_check(
@@ -241,16 +291,14 @@ impl AgentControl {
         state: &Arc<ThreadManagerState>,
         communication: InterAgentCommunication,
         context: AgentCommunicationContext,
-        parent_turn_id: Option<String>,
-        root_turn_id: Option<String>,
+        start_options: TurnStartOptions,
     ) -> CodexResult<String> {
         self.submit_inter_agent_communication(
             agent_id,
             state,
             communication,
             context,
-            parent_turn_id,
-            root_turn_id,
+            start_options,
         )
         .await
     }
@@ -261,13 +309,18 @@ impl AgentControl {
         state: &Arc<ThreadManagerState>,
         communication: InterAgentCommunication,
         context: AgentCommunicationContext,
-        parent_turn_id: Option<String>,
-        root_turn_id: Option<String>,
+        start_options: TurnStartOptions,
     ) -> CodexResult<String> {
         let communication_for_log =
             crate::agent_communication::logging_enabled().then(|| communication.clone());
-        let parent_turn_id = parent_turn_id.filter(|_| communication.trigger_turn);
-        let root_turn_id = root_turn_id.filter(|_| communication.trigger_turn);
+        let (parent_turn_id, root_turn_id) = if communication.trigger_turn {
+            (
+                start_options.parent_turn_id.clone(),
+                start_options.root_turn_id.clone(),
+            )
+        } else {
+            (None, None)
+        };
         let result = self
             .handle_thread_request_result(
                 agent_id,
@@ -275,7 +328,10 @@ impl AgentControl {
                 state
                     .send_op(
                         agent_id,
-                        Op::InterAgentCommunication { communication },
+                        Op::InterAgentCommunication {
+                            communication,
+                            start_options,
+                        },
                         parent_turn_id,
                         root_turn_id,
                     )
@@ -545,6 +601,7 @@ impl AgentControl {
             if !is_final(&status) {
                 return;
             }
+            let status_name = agent_status_name(&status);
 
             let Ok(state) = control.upgrade() else {
                 return;
@@ -588,8 +645,7 @@ impl AgentControl {
                         parent_thread_id,
                         communication,
                         context,
-                        /*parent_turn_id*/ None,
-                        /*root_turn_id*/ None,
+                        TurnStartOptions::default(),
                     )
                     .await;
                 if let (Ok(message_id), Ok(parent_thread)) =
@@ -608,17 +664,19 @@ impl AgentControl {
                             .with_correlation("parent_thread_id", parent_thread_id.to_string())
                             .with_correlation("child_thread_id", child_thread_id.to_string())
                             .with_correlation("message_id", message_id)
-                            .with_details(json!({"child_status": agent_status_name(&status)})),
+                            .with_details(json!({"child_status": status_name})),
                         );
                 }
                 return;
             }
-            let message = format_subagent_notification_message(child_reference.as_str(), &status);
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
             parent_thread
-                .inject_user_message_without_turn(message)
+                .inject_fragment_without_turn(SubagentNotification::new(
+                    child_reference.as_str(),
+                    status,
+                ))
                 .await;
             parent_thread
                 .session
@@ -632,7 +690,7 @@ impl AgentControl {
                     )
                     .with_correlation("parent_thread_id", parent_thread_id.to_string())
                     .with_correlation("child_thread_id", child_thread_id.to_string())
-                    .with_details(json!({"child_status": agent_status_name(&status)})),
+                    .with_details(json!({"child_status": status_name})),
                 );
         });
     }

@@ -4,13 +4,20 @@ This is a research and teaching fork of the open Codex agent harness. Its purpos
 
 ## Source pin
 
-- Upstream tag: `rust-v0.149.0`
-- Upstream commit: `758ef40f50c1a458425c7cfbf1eb12cbc07af0b0`
-- Workspace version: `0.149.0`
+- Upstream tag: `rust-v0.150.0-alpha.12.2`
+- Upstream commit: `a9802304f60ab14c0b07e3ee0db9a9c105ab0cb3`
+- Workspace version: `0.150.0-alpha.12.2`
 - Rust toolchain: `1.95.0`
-- Local baseline tag: `teaching-baseline-v0.149.0`
+- Rollback tag: `teaching-baseline-v0.149.0`
+- Rollback branch: `backup/pre-core-pin-v0.149.0`
+- Signed Desktop package: `26.825.32147`
+- Signed package SHA-256: `986d38b690dd0310933ce61175b09c27434001f4e114332bb0f7b6ffdc3ca406`
 
-This repository intentionally has no Git remote. The upstream tag and commit above are the provenance record for the code taught in the course.
+This repository intentionally has no Git remote. The exact Core and Desktop
+pins above are also enforced by `.env`, `run.sh`, and
+`build-desktop-observatory.sh`; the teaching launcher fails closed when the
+source, development binary, bundled Core, package version, or package digest
+does not match.
 
 ## Boundary
 
@@ -32,9 +39,10 @@ cargo build -j 1 -p codex-cli
 ./target/debug/codex --version
 ```
 
-The unmodified source pin built successfully on the course machine and reported `codex-cli 0.149.0`. A parallel first build caused a Rust 1.95 LLVM `SIGSEGV`; the serial retry completed successfully. Use `-j 1` for reproducible teaching builds on this machine.
-
-Tool-bearing runs also need `codex-code-mode-host` beside the development CLI. Building that package from the release tag was blocked on this machine on 2026-08-23 because the pinned Rusty V8 binary URL returned HTTP 404. For live verification only, the development CLI used the companion host already packaged with the installed npm Codex, after confirming that both CLIs reported version `0.149.0`. Do not mix host and CLI versions silently.
+The integrated source pin built successfully on the course machine and reports
+`codex-cli 0.150.0-alpha.12.2`. Use `-j 1` for reproducible teaching builds on
+this machine. The signed Desktop package carries the same Core version and its
+matching companion binaries; the launcher verifies that pairing before use.
 
 ## Trace capture
 
@@ -92,14 +100,15 @@ the existing private Unix-socket bridge through
 `CODEX_ROLLOUT_TRACE_SHARED_RUN=1` and full viewer evidence for the private
 teaching session. The normal standalone TUI flow remains available. The
 detailed contract, execution work, and acceptance boundary are in
-[`DESKTOP_OBSERVATORY_PLAN.md`](DESKTOP_OBSERVATORY_PLAN.md). Desktop live
-acceptance now includes an isolated two-root shared-run capture. The remaining
-profile-specific gate for ordinary model turns and a live spawned child is
-recorded in that plan.
+[`DESKTOP_OBSERVATORY_PLAN.md`](DESKTOP_OBSERVATORY_PLAN.md). The current Core
+pin exactly matches the signed Desktop payload that will be used for teaching;
+normal-profile live acceptance is recorded in that plan.
 
 ## Teaching capture and raw trace viewer
 
-The source pin is `rust-v0.149.0` at `758ef40f50c1a458425c7cfbf1eb12cbc07af0b0`; the baseline development build is the serial build documented above:
+The source pin is `rust-v0.150.0-alpha.12.2` at
+`a9802304f60ab14c0b07e3ee0db9a9c105ab0cb3`; the development build is the
+serial build documented above:
 
 ```bash
 cd codex-rs
@@ -191,18 +200,23 @@ python3 tools/lecture_2_app_server_trace_check.py tools/tests/fixtures/lecture_2
 
 The integrated fork was checked with focused package tests and private synthetic captures, not a repository-wide suite:
 
-- `cargo build -j 1 -p codex-cli` completed, and the development binary reports `codex-cli 0.149.0`;
-- five focused Core tests passed for context provenance, V2 eviction/reload, hook effects, and stop supervision;
+- `cargo build -j 1 -p codex-cli --bin codex` completed, and the development
+  binary reports `codex-cli 0.150.0-alpha.12.2`;
+- six focused Core tests passed for context provenance, V2 eviction and both
+  reload routes, hook effects, and hook-source attribution;
 - focused rollout-trace, RMCP, and App Server tests passed for exact frame persistence, request/response correlation, typed MCP `_meta` propagation, and unchanged filtered routing;
-- `just test -p codex-rollout-trace` passed all 69 focused crate tests,
+- `just test -p codex-rollout-trace` passed all 70 focused crate tests,
   including normalized App Server identities, bidirectional response context,
   persistent fork lineage, and shared-run ordering;
-- `python3 -m unittest tools.tests.test_trace_viewer` passed 25 tests for timeline/filter/summary behavior, integrity rules, wire-frame filtering and pairing, tailing, redaction, full-content delivery, artifact retrieval, HTTP metadata, and malformed input;
-- the three Lecture 2 checker tests passed, and its deterministic fixture was
-  accepted from both its bundle directory and command-line entry point;
+- `python3 -m unittest tools.tests.test_trace_viewer tools.tests.test_lecture_2_app_server_trace_check`
+  passed all 28 tests for viewer behavior and the deterministic Lecture 2
+  lifecycle checker;
 - `node --check tools/trace_viewer_web/app.js` and `git diff --check` passed before the final formatter pass;
 - a private live patch run produced 81 raw events, including 60 harness events, changed the synthetic file, and passed `--check`;
 - a private live V2 spawn/wait run produced 140 raw events, including `agent_residency` and `agent_identity`, and passed `--check`; and
 - an isolated headless browser received 34 initial fixture events, showed Guardian rows as decisions while naming their `apply_patch` relation, opened `payloads/tool-input.json` into a dedicated internal-patch view, and opened `payloads/request.json` to show the exact synthetic user prompt.
 
-`just fix -p codex-core` completed; its two mechanical fixes in instrumented paths were retained, while an unrelated upstream test cleanup was discarded. The Rust formatting stage also applied its change. The overall `just fmt` wrapper returned nonzero because this host lacks `dotslash` and its unrelated Python formatter could not write the uv cache; those host-tooling failures did not affect the Rust formatting result. No full workspace test suite was run.
+`just fix -p codex-core`, `just fix -p codex-app-server`, and `just fmt`
+completed. The formatter used a temporary writable uv cache because the host's
+default cache is read-only in the managed workspace. No full workspace test
+suite was run.

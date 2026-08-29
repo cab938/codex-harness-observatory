@@ -74,6 +74,11 @@ require_port() {
 }
 
 : "${OBSERVATORY_CODEX_BIN:?missing OBSERVATORY_CODEX_BIN in .env}"
+: "${OBSERVATORY_CORE_UPSTREAM_TAG:?missing OBSERVATORY_CORE_UPSTREAM_TAG in .env}"
+: "${OBSERVATORY_CORE_UPSTREAM_COMMIT:?missing OBSERVATORY_CORE_UPSTREAM_COMMIT in .env}"
+: "${OBSERVATORY_CORE_VERSION:?missing OBSERVATORY_CORE_VERSION in .env}"
+: "${OBSERVATORY_DESKTOP_PACKAGE_VERSION:?missing OBSERVATORY_DESKTOP_PACKAGE_VERSION in .env}"
+: "${OBSERVATORY_DESKTOP_PACKAGE_SHA256:?missing OBSERVATORY_DESKTOP_PACKAGE_SHA256 in .env}"
 : "${OBSERVATORY_VIEWER_SCRIPT:?missing OBSERVATORY_VIEWER_SCRIPT in .env}"
 : "${OBSERVATORY_PYTHON:?missing OBSERVATORY_PYTHON in .env}"
 : "${OBSERVATORY_VIEWER_HOST:?missing OBSERVATORY_VIEWER_HOST in .env}"
@@ -118,6 +123,25 @@ if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
   echo "Build it first with: (cd codex-rs && cargo build -p codex-cli --bin codex)" >&2
   exit 1
 fi
+actual_core_version="$("$codex_bin" --version 2>/dev/null)"
+expected_core_version="codex-cli $OBSERVATORY_CORE_VERSION"
+if [[ "$actual_core_version" != "$expected_core_version" ]]; then
+  echo "run.sh: patched Core is '$actual_core_version'; expected '$expected_core_version'" >&2
+  exit 1
+fi
+if ! command -v git >/dev/null 2>&1; then
+  echo "run.sh: git is required to verify the Core source pin" >&2
+  exit 1
+fi
+tagged_core_commit="$(git -C "$demonstration_dir" rev-parse "${OBSERVATORY_CORE_UPSTREAM_TAG}^{commit}" 2>/dev/null || true)"
+if [[ "$tagged_core_commit" != "$OBSERVATORY_CORE_UPSTREAM_COMMIT" ]]; then
+  echo "run.sh: $OBSERVATORY_CORE_UPSTREAM_TAG resolves to '${tagged_core_commit:-missing}'; expected $OBSERVATORY_CORE_UPSTREAM_COMMIT" >&2
+  exit 1
+fi
+if ! git -C "$demonstration_dir" merge-base --is-ancestor "$OBSERVATORY_CORE_UPSTREAM_COMMIT" HEAD; then
+  echo "run.sh: current source does not contain pinned Core commit $OBSERVATORY_CORE_UPSTREAM_COMMIT" >&2
+  exit 1
+fi
 if [[ -z "$python_bin" || ! -x "$python_bin" ]]; then
   echo "run.sh: Python executable was not found: $OBSERVATORY_PYTHON" >&2
   exit 1
@@ -145,6 +169,25 @@ if [[ "$client_mode" == "desktop" ]]; then
   desktop_feature_hook="$(dirname -- "$desktop_start")/.codex-linux/launcher.d/shared-app-server-socket-socket-env.sh"
   if [[ ! -x "$desktop_feature_hook" ]]; then
     echo "run.sh: Desktop candidate does not include the shared-app-server-socket feature: $desktop_feature_hook" >&2
+    echo "Rebuild it with: $demonstration_dir/build-desktop-observatory.sh" >&2
+    exit 1
+  fi
+  desktop_app_dir="$(dirname -- "$desktop_start")"
+  desktop_bundled_codex="$desktop_app_dir/resources/codex"
+  desktop_package_control="$desktop_app_dir/.codex-linux/upstream-package/control"
+  desktop_build_info="$desktop_app_dir/.codex-linux/build-info.json"
+  if [[ ! -x "$desktop_bundled_codex" || ! -f "$desktop_package_control" || ! -f "$desktop_build_info" ]]; then
+    echo "run.sh: Desktop candidate is missing bundled Core or provenance metadata" >&2
+    echo "Rebuild it with: $demonstration_dir/build-desktop-observatory.sh" >&2
+    exit 1
+  fi
+  desktop_bundled_version="$("$desktop_bundled_codex" --version 2>/dev/null)"
+  desktop_package_version="$(sed -n 's/^Version: //p' "$desktop_package_control")"
+  desktop_package_sha256="$(sed -n 's/.*"sha256": "\([^"]*\)".*/\1/p' "$desktop_build_info")"
+  if [[ "$desktop_bundled_version" != "$expected_core_version" \
+    || "$desktop_package_version" != "$OBSERVATORY_DESKTOP_PACKAGE_VERSION" \
+    || "$desktop_package_sha256" != "$OBSERVATORY_DESKTOP_PACKAGE_SHA256" ]]; then
+    echo "run.sh: Desktop candidate does not match the pinned teaching artifact" >&2
     echo "Rebuild it with: $demonstration_dir/build-desktop-observatory.sh" >&2
     exit 1
   fi

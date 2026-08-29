@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 
 demonstration_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+environment_file="$demonstration_dir/.env"
 
 usage() {
   cat <<'EOF'
@@ -31,6 +32,27 @@ EOF
 fail() {
   echo "build-desktop-observatory.sh: $*" >&2
   exit 1
+}
+
+[[ -f "$environment_file" ]] || fail "missing pin configuration: $environment_file"
+# shellcheck disable=SC1090
+source "$environment_file"
+: "${OBSERVATORY_CORE_UPSTREAM_TAG:?missing OBSERVATORY_CORE_UPSTREAM_TAG in .env}"
+: "${OBSERVATORY_CORE_UPSTREAM_COMMIT:?missing OBSERVATORY_CORE_UPSTREAM_COMMIT in .env}"
+: "${OBSERVATORY_CORE_VERSION:?missing OBSERVATORY_CORE_VERSION in .env}"
+: "${OBSERVATORY_DESKTOP_PACKAGE_VERSION:?missing OBSERVATORY_DESKTOP_PACKAGE_VERSION in .env}"
+: "${OBSERVATORY_DESKTOP_PACKAGE_SHA256:?missing OBSERVATORY_DESKTOP_PACKAGE_SHA256 in .env}"
+
+verify_source_pin() {
+  command -v git >/dev/null 2>&1 || fail "git is required to verify the Core source pin"
+  local tagged_commit
+  tagged_commit="$(git -C "$demonstration_dir" rev-parse "${OBSERVATORY_CORE_UPSTREAM_TAG}^{commit}" 2>/dev/null)" \
+    || fail "Core tag is unavailable: $OBSERVATORY_CORE_UPSTREAM_TAG"
+  [[ "$tagged_commit" == "$OBSERVATORY_CORE_UPSTREAM_COMMIT" ]] \
+    || fail "Core tag resolves to $tagged_commit, expected $OBSERVATORY_CORE_UPSTREAM_COMMIT"
+  git -C "$demonstration_dir" merge-base --is-ancestor \
+    "$OBSERVATORY_CORE_UPSTREAM_COMMIT" HEAD \
+    || fail "current source does not contain pinned Core commit $OBSERVATORY_CORE_UPSTREAM_COMMIT"
 }
 
 absolute_existing_directory() {
@@ -106,6 +128,7 @@ while (($#)); do
 done
 
 desktop_repo="$(absolute_existing_directory "$desktop_repo")"
+verify_source_pin
 installer="$desktop_repo/install.sh"
 feature_manifest="$desktop_repo/linux-features/shared-app-server-socket/feature.json"
 [[ -x "$installer" ]] || fail "external Desktop install flow is not executable: $installer"
@@ -157,9 +180,28 @@ echo "Enabling only: shared-app-server-socket"
 
 candidate_start="$app_dir/start.sh"
 candidate_hook="$app_dir/.codex-linux/launcher.d/shared-app-server-socket-socket-env.sh"
+candidate_codex="$app_dir/resources/codex"
+candidate_control="$app_dir/.codex-linux/upstream-package/control"
+candidate_build_info="$app_dir/.codex-linux/build-info.json"
 [[ -x "$candidate_start" ]] || fail "installer completed without a candidate launcher: $candidate_start"
 [[ -x "$candidate_hook" ]] || fail "installer completed without shared socket support: $candidate_hook"
+[[ -x "$candidate_codex" ]] || fail "installer completed without its bundled Core: $candidate_codex"
+[[ -f "$candidate_control" ]] || fail "installer completed without package metadata: $candidate_control"
+[[ -f "$candidate_build_info" ]] || fail "installer completed without build metadata: $candidate_build_info"
+
+candidate_core_version="$("$candidate_codex" --version 2>/dev/null)"
+expected_core_version="codex-cli $OBSERVATORY_CORE_VERSION"
+[[ "$candidate_core_version" == "$expected_core_version" ]] \
+  || fail "Desktop bundles '$candidate_core_version', expected '$expected_core_version'"
+candidate_package_version="$(sed -n 's/^Version: //p' "$candidate_control")"
+[[ "$candidate_package_version" == "$OBSERVATORY_DESKTOP_PACKAGE_VERSION" ]] \
+  || fail "Desktop package is $candidate_package_version, expected $OBSERVATORY_DESKTOP_PACKAGE_VERSION"
+candidate_package_sha256="$(sed -n 's/.*"sha256": "\([^"]*\)".*/\1/p' "$candidate_build_info")"
+[[ "$candidate_package_sha256" == "$OBSERVATORY_DESKTOP_PACKAGE_SHA256" ]] \
+  || fail "Desktop package SHA-256 is $candidate_package_sha256, expected $OBSERVATORY_DESKTOP_PACKAGE_SHA256"
 
 echo "Desktop candidate is ready: $candidate_start"
+echo "Verified Core pin: $OBSERVATORY_CORE_UPSTREAM_TAG ($OBSERVATORY_CORE_UPSTREAM_COMMIT)"
+echo "Verified Desktop package: $OBSERVATORY_DESKTOP_PACKAGE_VERSION ($OBSERVATORY_DESKTOP_PACKAGE_SHA256)"
 echo "Launch the retained teaching run with:"
 printf '  OBSERVATORY_DESKTOP_START=%q %q --desktop\n' "$candidate_start" "$demonstration_dir/run.sh"

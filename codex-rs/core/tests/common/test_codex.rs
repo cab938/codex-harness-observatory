@@ -308,7 +308,7 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
 /// Non-default apply_patch model output shapes used by compatibility tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyPatchModelOutput {
-    ShellCommandViaHeredoc,
+    ExecCommandViaHeredoc,
 }
 
 /// Returns the permission fields required by test thread-settings overrides.
@@ -494,12 +494,21 @@ impl TestCodexBuilder {
         &mut self,
         server: &wiremock::MockServer,
     ) -> anyhow::Result<TestCodex> {
+        let test_env = test_env().await?;
+        self.build_with_environment(server, test_env).await
+    }
+
+    /// Builds a test runtime using an explicitly selected execution environment.
+    pub async fn build_with_environment(
+        &mut self,
+        server: &wiremock::MockServer,
+        test_env: TestEnv,
+    ) -> anyhow::Result<TestCodex> {
         let home = match self.home.clone() {
             Some(home) => home,
             None => Arc::new(TempDir::new()?),
         };
         let base_url = format!("{}/v1", server.uri());
-        let test_env = test_env().await?;
         Box::pin(self.build_with_home_and_base_url(
             base_url, home, /*resume_from*/ None, test_env,
             /*include_local_environment*/ false,

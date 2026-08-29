@@ -16,6 +16,7 @@ use strum_macros::EnumIter;
 
 use crate::AgentPath;
 use crate::ResponseItemId;
+use crate::SanitizedGitUrl;
 use crate::SessionId;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
@@ -56,9 +57,12 @@ use crate::plan_tool::UpdatePlanArgs;
 use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
+use crate::turn_input::CyberAccessProgram;
+use crate::turn_input::SuspendTurnOutcome;
 use crate::turn_input::TurnInputMode;
 use crate::turn_input::TurnInputRequest;
 use crate::turn_input::TurnInputSubmission;
+use crate::turn_input::TurnStartOptions;
 use codex_extension_items::image_generation::ImageGenerationFailure;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -251,6 +255,7 @@ pub struct ConversationStartParams {
 pub enum ConversationStartTransport {
     Websocket,
     Webrtc { sdp: String },
+    ExistingCall { call_id: String },
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -466,8 +471,33 @@ pub struct ConversationSpeechParams {
     pub text: String,
 }
 
-/// Persistent thread-settings overrides that can be applied before user input or
-/// on their own.
+/// Supported sparse changes to one live task's current settings, regardless of
+/// task kind. Child sessions and consumers of frozen initial settings are unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TurnSettingsUpdate {
+    pub model: Option<String>,
+    /// `None` preserves the selection; `Some(None)` clears it.
+    pub effort: Option<Option<ReasoningEffortConfig>>,
+    pub summary: Option<ReasoningSummaryConfig>,
+    /// `None` preserves the requested tier; `Some(None)` clears it.
+    pub service_tier: Option<Option<String>>,
+}
+
+/// The result of processing a turn-settings update, not merely queueing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnSettingsUpdateOutcome {
+    /// Published for subsequent captures; already captured steps are unchanged.
+    /// The task need not sample or consume every selected preference.
+    Applied,
+    /// The named live task was absent or lost before publication.
+    TargetUnavailable,
+    Rejected {
+        reason: String,
+    },
+}
+
+/// Thread-settings overrides that can be applied before user input or on their
+/// own. Standalone updates change the settings inherited by future turns.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ThreadSettingsOverrides {
     /// Updated fallback `cwd` and environments supplied together as a complete pair.
@@ -577,22 +607,37 @@ pub enum Op {
     /// Resume an interrupted regular turn.
     RecoverTurn {
         thread_settings: ThreadSettingsOverrides,
+        start_options: TurnStartOptions,
         reply: oneshot::Sender<CodexResult<TurnInputSubmission>>,
     },
 
-    /// Apply persistent thread-settings overrides without starting a turn.
+    /// Stop the active root turn without recording a terminal turn event.
+    SuspendTurnAndShutdown {
+        reply: oneshot::Sender<CodexResult<SuspendTurnOutcome>>,
+    },
+
+    /// Apply thread-settings overrides without starting a turn.
     ///
     /// This uses the same submission queue as turn starts so app-server can
     /// preserve caller order between both kinds of mutation.
     ThreadSettings {
-        /// Persistent thread-settings overrides to apply.
+        /// Sparse thread-settings overrides to apply.
         thread_settings: ThreadSettingsOverrides,
+    },
+
+    /// Update only the named running turn, without changing future settings.
+    /// The reply reports the actual publication or why it did not occur.
+    TurnSettings {
+        turn_id: String,
+        update: TurnSettingsUpdate,
+        reply: oneshot::Sender<TurnSettingsUpdateOutcome>,
     },
 
     /// Inter-agent communication that should be recorded as agent-message history
     /// while still using the normal thread submission lifecycle.
     InterAgentCommunication {
         communication: InterAgentCommunication,
+        start_options: TurnStartOptions,
     },
 
     /// Approve a command execution
@@ -874,7 +919,9 @@ impl Op {
             Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::TurnInput { .. } => "turn_input",
             Self::RecoverTurn { .. } => "recover_turn",
+            Self::SuspendTurnAndShutdown { .. } => "suspend_turn_and_shutdown",
             Self::ThreadSettings { .. } => "thread_settings",
+            Self::TurnSettings { .. } => "turn_settings",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::ExecApproval { .. } => "exec_approval",
             Self::PatchApproval { .. } => "patch_approval",
@@ -1511,6 +1558,7 @@ pub enum HookEventName {
     SubagentStart,
     SubagentStop,
     Stop,
+    Interrupt,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -2596,6 +2644,7 @@ pub enum SessionSource {
 pub enum ThreadSource {
     User,
     Subagent,
+    GuardianReview,
     Feature(String),
     MemoryConsolidation,
 }
@@ -2605,6 +2654,7 @@ impl ThreadSource {
         match self {
             ThreadSource::User => "user",
             ThreadSource::Subagent => "subagent",
+            ThreadSource::GuardianReview => "guardian_review",
             ThreadSource::Feature(feature) => feature,
             ThreadSource::MemoryConsolidation => "memory_consolidation",
         }
@@ -2638,6 +2688,7 @@ impl FromStr for ThreadSource {
         match value {
             "user" => Ok(ThreadSource::User),
             "subagent" => Ok(ThreadSource::Subagent),
+            "guardian_review" => Ok(ThreadSource::GuardianReview),
             "memory_consolidation" => Ok(ThreadSource::MemoryConsolidation),
             other => Ok(ThreadSource::Feature(other.to_string())),
         }
@@ -2649,6 +2700,7 @@ impl FromStr for ThreadSource {
 #[ts(rename_all = "snake_case")]
 pub enum InternalSessionSource {
     MemoryConsolidation,
+    Guardian,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
@@ -2821,6 +2873,7 @@ impl fmt::Display for InternalSessionSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InternalSessionSource::MemoryConsolidation => f.write_str("memory_consolidation"),
+            InternalSessionSource::Guardian => f.write_str("guardian"),
         }
     }
 }
@@ -3064,6 +3117,8 @@ pub struct TurnContextItem {
     pub multi_agent_mode: Option<MultiAgentMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realtime_active: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cyber_access_program: Option<CyberAccessProgram>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
     // Compatibility-only field written with a default value so older Codex
@@ -3158,8 +3213,13 @@ pub struct GitInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     /// Repository URL (if available from remote)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repository_url: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::sanitized_git_url::deserialize_optional_sanitized_git_url",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<String>")]
+    pub repository_url: Option<SanitizedGitUrl>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -4104,6 +4164,7 @@ pub enum SubAgentActivityKind {
     Started,
     Interacted,
     Interrupted,
+    Completed,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -5813,6 +5874,7 @@ mod tests {
             multi_agent_version: None,
             multi_agent_mode: None,
             realtime_active: None,
+            cyber_access_program: None,
             effort: None,
             summary: ReasoningSummaryConfig::Auto,
         };

@@ -109,10 +109,13 @@ Measured acceptance on 2026-08-28:
   child attachment, exact sequence ordering, and one terminal shared-run event;
 - the viewer backend passed 24 focused tests, and browser interaction confirmed
   task focus, child nesting, full artifact access, and no console errors;
-- the Desktop socket feature passed all 41 focused tests against the rebuilt
-  patched `codex-cli 0.149.0`;
-- the side-by-side signed Desktop candidate connected to that Core in an
-  isolated X11 session and reported App Server version `0.149.0`;
+- the original Desktop socket acceptance passed all 41 focused tests against
+  the patched Core, and the current development binary now reports
+  `codex-cli 0.150.0-alpha.12.2`;
+- the Core source is pinned to `rust-v0.150.0-alpha.12.2` at
+  `a9802304f60ab14c0b07e3ee0db9a9c105ab0cb3`, exactly matching the bundled
+  Core in signed Desktop package `26.825.32147` (SHA-256
+  `986d38b690dd0310933ce61175b09c27434001f4e114332bb0f7b6ffdc3ca406`);
 - two independent protocol-level Desktop roots were loaded concurrently. The
   live viewer reported two active task lanes in one full-evidence bundle;
 - the retained native run at
@@ -122,24 +125,12 @@ Measured acceptance on 2026-08-28:
 - the ordinary TUI launcher started its App Server and full-evidence viewer and
   shut both down cleanly with a disposable `CODEX_HOME`.
 
-One profile-specific readiness issue remains before the teaching demonstration
-can use ordinary model turns. The normal local profile enables the bundled
-`codex-app-tools@openai-bundled` plugin; although its checked-in Desktop MCP
-declaration is stdio-shaped, `thread/start` reaches this patched Core as an
-invalid `mcp_servers.codex_app` transport. There is no explicit
-`[mcp_servers.codex_app]` table in the user's `config.toml`, so silently editing
-that file would not address the actual boundary. This is most likely a merge or
-version-compatibility gap between the current signed Desktop/plugin payload and
-the pinned open Core, but that inference still needs a focused compatibility
-trace.
-
-The native concurrency proof therefore used an empty temporary `CODEX_HOME`
-without reading or copying credentials and created roots without model turns.
-Child-root lineage is covered by the focused Rust and browser-fixture evidence,
-but a live Desktop-spawned child is not yet claimed. Before the full teaching
-rehearsal, choose between advancing the patched Core to the matching Desktop
-payload or explicitly disabling that bundled app-tools plugin for the teaching
-profile; do not mutate the normal profile as an incidental workaround.
+The earlier normal-profile failure was a version boundary: signed Desktop and
+its bundled `codex-app-tools@openai-bundled` payload were newer than the prior
+`0.149.0` open Core. The source, binary, and Desktop artifact are now pinned as
+one exact set. The launcher does not edit the user's profile or disable the
+bundled plugin. A normal-profile live parent/child acceptance is the remaining
+gate before this tranche is marked complete.
 
 The Desktop route is intentionally Linux-specific because it uses the existing
 Linux socket feature. The Core and trace changes remain platform-neutral; no

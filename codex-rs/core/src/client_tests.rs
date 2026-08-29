@@ -110,6 +110,7 @@ fn test_model_client_with_thread_id(
         session_source,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
+        /*content_item_kinds_enabled*/ true,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
@@ -155,6 +156,7 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
         SessionSource::Cli,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
+        /*content_item_kinds_enabled*/ true,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
@@ -297,13 +299,18 @@ fn test_session_telemetry() -> SessionTelemetry {
 }
 
 #[test]
-fn ultra_reasoning_uses_max_for_requests() {
+fn reasoning_effort_for_requests_maps_ultra_and_persistent() {
     assert_eq!(
         (
             super::reasoning_effort_for_request(ReasoningEffort::Ultra),
             super::reasoning_effort_for_request(ReasoningEffort::High),
+            super::reasoning_effort_for_request(ReasoningEffort::Persistent),
         ),
-        (ReasoningEffort::Max, ReasoningEffort::High,)
+        (
+            ReasoningEffort::Max,
+            ReasoningEffort::High,
+            ReasoningEffort::Custom("disabled".to_string()),
+        )
     );
 }
 
@@ -479,6 +486,24 @@ fn build_subagent_headers_sets_other_subagent_label() {
         .get(X_OPENAI_SUBAGENT_HEADER)
         .and_then(|value| value.to_str().ok());
     assert_eq!(value, Some("memory_consolidation"));
+}
+
+#[test]
+fn internal_session_prompt_cache_key_is_scoped_to_parent_thread() {
+    let parent_thread_id = ThreadId::new();
+    let client = test_model_client(SessionSource::Internal(InternalSessionSource::Guardian));
+    let metadata = test_responses_metadata_for_client(
+        &client,
+        Some("turn-123"),
+        "window-1".to_string(),
+        Some(parent_thread_id),
+        TestCodexResponsesRequestKind::Turn,
+    );
+
+    assert_eq!(
+        client.prompt_cache_key(&metadata),
+        format!("guardian:{parent_thread_id}")
+    );
 }
 
 #[test]
@@ -937,6 +962,7 @@ fn model_client_with_counting_attestation(
         SessionSource::Exec,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
+        /*content_item_kinds_enabled*/ true,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
@@ -964,6 +990,25 @@ async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses() 
     let headers = model_client
         .build_websocket_headers(&responses_metadata)
         .await;
+
+    assert_eq!(
+        headers
+            .get(crate::attestation::X_OAI_ATTESTATION_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("v1.header-1"),
+    );
+    assert_eq!(attestation_calls.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn existing_call_sideband_headers_include_attestation() {
+    let (model_client, attestation_calls) =
+        model_client_with_counting_attestation(/*include_attestation*/ true);
+
+    let headers = model_client
+        .realtime_sideband_headers(http::HeaderMap::new())
+        .await
+        .expect("existing call sideband headers should build");
 
     assert_eq!(
         headers
