@@ -16,8 +16,8 @@ This is a research and teaching fork of the open Codex agent harness. Its purpos
 This repository intentionally has no Git remote. The exact Core and Desktop
 pins above are also enforced by `.env`, `run.sh`, and
 `build-desktop-observatory.sh`; the teaching launcher fails closed when the
-source, development binary, bundled Core, package version, or package digest
-does not match.
+source tag/commit, development and bundled Core reported versions, signed
+package version, or package digest does not match the declared teaching set.
 
 ## Boundary
 
@@ -98,12 +98,20 @@ The Linux launcher selects this development Core with `CODEX_CLI_PATH` and uses
 the existing private Unix-socket bridge through
 `CODEX_LINUX_APP_SERVER_BRIDGE_SOCKET`. It enables
 `CODEX_ROLLOUT_TRACE_SHARED_RUN=1` and full viewer evidence for the private
-teaching session. The normal standalone TUI flow remains available. The
-detailed contract, execution work, and acceptance boundary are in
-[`DESKTOP_OBSERVATORY_PLAN.md`](DESKTOP_OBSERVATORY_PLAN.md). The current Core
-pin exactly matches the signed Desktop payload that will be used for teaching;
-an isolated disposable-profile handshake is complete, and the remaining
-normal-profile authorization boundary is recorded in that plan.
+teaching session. For `app-server` only, a retained per-run CLI bridge supplies
+the base `codex_app` MCP transport from the pinned signed Desktop bundle before
+starting the public-source Core. Desktop remains authoritative for its
+per-thread tool policy, and other CLI commands pass through unchanged. This is
+a launch compatibility bridge, not Desktop instrumentation, and it does not
+edit the selected profile.
+
+The normal standalone TUI flow remains available. The detailed contract,
+execution work, and completed authenticated acceptance are in
+[`DESKTOP_OBSERVATORY_PLAN.md`](DESKTOP_OBSERVATORY_PLAN.md). The launcher pins
+the public Core source tag and commit, development binary version, and signed
+Desktop package version and digest as one teaching set. The signed bundled
+binary reports the same Core version; bit-for-bit or private-source identity
+with the public Core is not asserted.
 
 ## Teaching capture and raw trace viewer
 
@@ -220,6 +228,14 @@ The integrated fork was checked with focused package tests and private synthetic
   App Server `0.150.0-alpha.12.2`, completed its initialization handshake, and
   served the full-evidence Observatory viewer on a separately verified port;
   the disposable profile correctly stopped at sign-in; and
+- an explicitly authorized normal-profile Desktop run completed live model
+  turns, retained one spawned child under its root, and proved two independent
+  root turns genuinely overlapped in one shared bundle. The 2,515-event trace
+  has one `run_started`, one `run_ended`, 1,228 App Server frames, 549 MCP
+  frames, and passes `tools/trace_viewer.py --check`; and
+- a second authenticated smoke through the checked-in Desktop CLI bridge
+  returned the exact requested response, reported `codex_app` ready, retained
+  a clean 751-event trace, and shut down its X11 display and viewer port; and
 - an occupied-port check proved that `run.sh` now reports the viewer's bind
   failure instead of accepting an unrelated local HTTP service as ready.
 

@@ -117,6 +117,9 @@ runs_dir="$(resolve_path "$OBSERVATORY_RUNS_DIR")"
 desktop_start=""
 desktop_feature_hook=""
 desktop_home_description=""
+desktop_cli_bridge_template=""
+desktop_codex_app_tools_root=""
+desktop_cli_path=""
 
 if [[ -z "$codex_bin" || ! -x "$codex_bin" ]]; then
   echo "run.sh: patched Codex binary is not executable: ${codex_bin:-$OBSERVATORY_CODEX_BIN}" >&2
@@ -176,9 +179,19 @@ if [[ "$client_mode" == "desktop" ]]; then
   desktop_bundled_codex="$desktop_app_dir/resources/codex"
   desktop_package_control="$desktop_app_dir/.codex-linux/upstream-package/control"
   desktop_build_info="$desktop_app_dir/.codex-linux/build-info.json"
+  desktop_cli_bridge_template="$demonstration_dir/tools/desktop_core_bridge.sh"
+  desktop_codex_app_tools_root="$desktop_app_dir/resources/plugins/openai-bundled/plugins/codex-app-tools"
   if [[ ! -x "$desktop_bundled_codex" || ! -f "$desktop_package_control" || ! -f "$desktop_build_info" ]]; then
     echo "run.sh: Desktop candidate is missing bundled Core or provenance metadata" >&2
     echo "Rebuild it with: $demonstration_dir/build-desktop-observatory.sh" >&2
+    exit 1
+  fi
+  if [[ ! -x "$desktop_cli_bridge_template" \
+    || ! -f "$desktop_codex_app_tools_root/desktop-mcp.json" \
+    || ! -x "$desktop_codex_app_tools_root/scripts/launch_codex_app_tools_mcp" \
+    || ! -f "$desktop_codex_app_tools_root/server.mjs" ]]; then
+    echo "run.sh: Desktop candidate is missing the pinned codex-app-tools bridge inputs" >&2
+    echo "Rebuild the candidate or restore: $desktop_cli_bridge_template" >&2
     exit 1
   fi
   desktop_bundled_version="$("$desktop_bundled_codex" --version 2>/dev/null)"
@@ -449,12 +462,24 @@ prepare_desktop_socket() {
   fi
 }
 
+prepare_desktop_cli_bridge() {
+  local bridge_dir="$run_dir/desktop-cli"
+
+  mkdir -p -- "$bridge_dir"
+  cp -- "$desktop_cli_bridge_template" "$bridge_dir/codex"
+  ln -s -- "$codex_bin" "$bridge_dir/real-codex"
+  ln -s -- "$desktop_codex_app_tools_root" "$bridge_dir/codex-app-tools"
+  chmod 0700 -- "$bridge_dir" "$bridge_dir/codex"
+  desktop_cli_path="$bridge_dir/codex"
+}
+
 start_desktop() {
+  prepare_desktop_cli_bridge
   prepare_desktop_socket
   (
     cd -- "$workspace"
     exec setsid env \
-      CODEX_CLI_PATH="$codex_bin" \
+      CODEX_CLI_PATH="$desktop_cli_path" \
       CODEX_ROLLOUT_TRACE_ROOT="$trace_root" \
       CODEX_ROLLOUT_TRACE_SHARED_RUN=1 \
       CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1 \
@@ -470,6 +495,7 @@ start_desktop() {
   echo "  Socket:   $desktop_socket"
   echo "  Log:      $desktop_log"
   echo "  Profile:  $desktop_home_description"
+  echo "  Core:     $codex_bin via pinned Desktop MCP bridge"
   echo
 }
 

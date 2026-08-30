@@ -311,7 +311,7 @@ and rejects an extra turn start after steering.
 
 ## Phase 4: Desktop shared-run teaching
 
-Status: in implementation.
+Status: complete on 2026-08-30.
 
 Phase 4 changes the run ownership model only when explicitly enabled through
 `CODEX_ROLLOUT_TRACE_SHARED_RUN=1`. One App Server lifetime then owns one
@@ -383,11 +383,14 @@ Focused verification:
 
 - deterministic viewer tests plus one browser interaction cover focus, live
   interleaving, child nesting, and full payload selection; and
-- isolated disposable-profile Desktop acceptance proves the exact pinned Core
-  handshake and viewer launch; then an explicitly authorized normal-profile
-  acceptance must start two independent tasks plus one child and retain one
-  shared bundle. Do not mark this tranche complete until that account-backed
-  live capture succeeds.
+- isolated disposable-profile Desktop acceptance proves the pinned teaching-set
+  handshake and viewer launch; and
+- the explicitly authorized normal-profile acceptance retained one child under
+  its root and two genuinely overlapping independent root turns in shared
+  bundle
+  `personal/observatory-runs/run-20260830-105825.2pCAKV/traces/trace-02210732-8de9-46a1-ab4a-8be773667a18-shared`.
+  A second authenticated smoke through the checked-in base-transport bridge
+  retained a clean bundle in `run-20260830-110931.WNdenH`.
 
 ## Verification budget
 

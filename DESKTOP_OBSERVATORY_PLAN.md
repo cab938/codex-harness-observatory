@@ -56,6 +56,16 @@ Server lifecycle. The observatory launcher supplies
 full-content viewer option. This keeps the Desktop/CLI boundary narrow: no
 Desktop protocol changes and no public listener are introduced.
 
+The signed Desktop supplies a base `codex_app` MCP transport in its bundled
+plugin, then sends per-thread policy such as `enabled_tools` when starting a
+task. Public Core does not know that bundled base transport and rejects the
+policy-only table. `run.sh --desktop` therefore gives Desktop a retained
+per-run `CODEX_CLI_PATH` bridge. For `app-server` only, the bridge prepends the
+base stdio transport and approval defaults from the pinned signed bundle before
+starting the development Core; Desktop's request still owns the per-thread
+tool selection. Other CLI commands pass through unchanged. No normal-profile
+configuration is rewritten.
+
 The existing TUI flow stays compatible. Without
 `CODEX_ROLLOUT_TRACE_SHARED_RUN=1`, a standalone root task keeps its current
 single-bundle behavior. With it, the App Server scope creates one shared bundle
@@ -70,7 +80,7 @@ for all root tasks in that server lifetime.
 | MCP attribution | Preserve root/thread/turn/call context around every send/receive transport shape; scope pending correlation by connection as well as request ID. | A focused overlapping-call test proves that responses retain their original task attribution. |
 | Viewer data model | Treat `trace.jsonl` as the only persisted input; derive roots, child edges, activity and task status from live rows. | Deterministic fixture and Python tests show separate task roots, child nesting, session traffic, and raw writer order. |
 | Viewer interaction | Add an all-tasks view, task focus, status badges, lanes and concurrency overlap without reordering evidence. | Browser interaction shows two roots in flight, an agent child below its root, focus changes, and a full payload opened from the correct lane. |
-| Desktop teaching launcher | Build/use a separately identified Desktop candidate that enables the existing socket feature; select the patched Core through `CODEX_CLI_PATH`; launch the viewer before Desktop; retain the run directory on shutdown. | Existing socket-feature test passes with the patched binary, Desktop connects through the private socket, and a trace bundle is retained. |
+| Desktop teaching launcher | Build/use a separately identified Desktop candidate that enables the existing socket feature; select the patched Core through the retained compatibility bridge at `CODEX_CLI_PATH`; launch the viewer before Desktop; retain the run directory on shutdown. | Existing socket-feature test passes with the patched binary, bundled `codex_app` reaches ready state, Desktop connects through the private socket, and a trace bundle is retained. |
 | Documentation | Explain boundaries, launch flow, full-evidence consequence, and the distinction between implemented paths and live acceptance. | This plan, the main observatory guide, and tranche record agree on the contract. |
 
 ## Teaching sequence
@@ -114,8 +124,8 @@ Measured acceptance on 2026-08-28:
   the patched Core, and the current development binary now reports
   `codex-cli 0.150.0-alpha.12.2`;
 - the Core source is pinned to `rust-v0.150.0-alpha.12.2` at
-  `a9802304f60ab14c0b07e3ee0db9a9c105ab0cb3`, exactly matching the bundled
-  Core in signed Desktop package `26.825.32147` (SHA-256
+  `a9802304f60ab14c0b07e3ee0db9a9c105ab0cb3`; the bundled Core in signed
+  Desktop package `26.825.32147` reports the same version (package SHA-256
   `986d38b690dd0310933ce61175b09c27434001f4e114332bb0f7b6ffdc3ca406`);
 - the signed candidate opened on isolated X11 display `:93` with a disposable
   unauthenticated profile, connected through the private socket, reported App
@@ -133,17 +143,49 @@ Measured acceptance on 2026-08-28:
 - the ordinary TUI launcher started its App Server and full-evidence viewer and
   shut both down cleanly with a disposable `CODEX_HOME`.
 
-The earlier normal-profile failure was consistent with a version boundary:
-signed Desktop and its bundled `codex-app-tools@openai-bundled` payload were
-newer than the prior `0.149.0` open Core. The identified mismatch is now
-removed by pinning the source, binary, and Desktop artifact as one exact set.
-The launcher does not edit the user's profile or disable the bundled plugin.
+The public source is pinned to the tag and commit above, while the signed
+Desktop artifact is separately pinned by package version and digest. Both Core
+binaries report `0.150.0-alpha.12.2`; this is a compatible teaching set, not a
+claim that the signed private binary is bit-identical to the public-source
+build.
 
-A normal-profile live model turn and Desktop-spawned child remain the final
-acceptance gate. That run can read and transmit stored account and profile
-state, so it was not performed without explicit operator authorization after
-that consequence was disclosed. The disposable-profile handshake does not
-substitute for this final account-backed check.
+Measured authenticated acceptance on 2026-08-30, after explicit operator
+authorization:
+
+- diagnostic run `personal/observatory-runs/run-20260830-104808.robXnh`
+  reached the signed-in Desktop but failed before a model turn with `invalid
+  transport in mcp_servers.codex_app`. Its request showed the policy-only
+  Desktop overlay, which established the need for the base-transport bridge;
+- accepted run `personal/observatory-runs/run-20260830-105825.2pCAKV` retained
+  shared bundle
+  `traces/trace-02210732-8de9-46a1-ab4a-8be773667a18-shared`. It contains 2,515
+  events, including 1,228 App Server frames, 549 MCP frames, 18 thread
+  lifecycles, nine turn lifecycles, one child result, and one terminal shared
+  run event. `tools/trace_viewer.py --check` reports `trace integrity: clean`;
+- root turn `01a05331-e7ae-7e83-8af8-eeaa8d79b26a` ran from
+  `1788102175228` through `1788102259629`. Independent root turn
+  `01a05332-4b59-7f01-85f6-f1ef97063683` began at `1788102200668` and ended at
+  `1788102210149`, entirely inside the first interval. This is the accepted
+  concurrency evidence. The earlier task A/task B pair was sequential and is
+  not counted as proof of overlap;
+- child `01a0532e-5fd4-7433-af8e-e016406fb492` was visibly spawned under root
+  `01a0532e-3ccc-7f70-a7f4-6225975cd5b5`, retained that
+  `task_root_thread_id`, and returned its result through the shared ledger;
+- the checked-in bridge then passed a separate authenticated smoke in
+  `personal/observatory-runs/run-20260830-110931.WNdenH`. Desktop returned
+  `PERSISTENT BRIDGE OK`, its log reported `codex_app` ready without the
+  transport error, and bundle
+  `traces/trace-75aa7b3e-c14f-401f-a350-0699457a5d03-shared` retained 751 clean
+  events; and
+- both accepted sessions shut down cleanly. Their shared traces contain one
+  final `run_ended`, the private viewer port closed, and isolated X11 display
+  `:93` was removed. The launcher did not edit the normal profile; ordinary
+  signed-in Desktop/account runtime activity occurred within the disclosed
+  authorization.
+
+The normal-profile live-model, overlapping-root, and Desktop-spawned-child gate
+is complete. The retained bundles contain unredacted private teaching evidence
+and must remain local unless reviewed deliberately.
 
 The Desktop route is intentionally Linux-specific because it uses the existing
 Linux socket feature. The Core and trace changes remain platform-neutral; no
