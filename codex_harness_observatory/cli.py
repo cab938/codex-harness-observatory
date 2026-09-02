@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import subprocess
@@ -288,9 +289,9 @@ def _port(name: str, default: str) -> int:
     try:
         port = int(value)
     except ValueError as exc:
-        raise ObservatoryError(f"{name} must be an integer from 1 through 65535 (got {value!r})") from exc
-    if not 1 <= port <= 65535:
-        raise ObservatoryError(f"{name} must be an integer from 1 through 65535 (got {value!r})")
+        raise ObservatoryError(f"{name} must be an integer from 0 through 65535 (got {value!r})") from exc
+    if not 0 <= port <= 65535:
+        raise ObservatoryError(f"{name} must be an integer from 0 through 65535 (got {value!r})")
     return port
 
 
@@ -363,6 +364,36 @@ def _wait_for_service(
     raise ObservatoryError(f"Timed out waiting for {label} at {url}.\n{recent}")
 
 
+def _wait_for_bound_url(
+    label: str,
+    scheme: str,
+    process: subprocess.Popen[object],
+    log_path: Path,
+    timeout: float,
+) -> str:
+    pattern = re.compile(
+        rf"\b{re.escape(scheme)}://(?:\[[^\]\s]+\]|[^:/\s]+):[0-9]+\b"
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        contents = log_path.read_text(encoding="utf-8", errors="replace")
+        match = pattern.search(contents)
+        if match:
+            return match.group(0)
+        if process.poll() is not None:
+            recent = contents[-4000:]
+            raise ObservatoryError(f"{label} exited before reporting its address:\n{recent}")
+        time.sleep(0.1)
+    recent = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+    raise ObservatoryError(f"Timed out waiting for {label} to report its address.\n{recent}")
+
+
+def _app_server_ready_url(app_url: str) -> str:
+    if not app_url.startswith("ws://"):
+        raise ObservatoryError(f"Codex app server reported an invalid address: {app_url}")
+    return f"http://{app_url.removeprefix('ws://')}/readyz"
+
+
 def _run() -> int:
     codex_home_value = os.environ.get("CODEX_HOME", "")
     if not codex_home_value:
@@ -384,9 +415,9 @@ def _run() -> int:
         codex_bin = install_core(codex_home)
 
     app_host = _setting("OBSERVATORY_APP_SERVER_HOST", "127.0.0.1")
-    app_port = _port("OBSERVATORY_APP_SERVER_PORT", "4500")
+    app_port = _port("OBSERVATORY_APP_SERVER_PORT", "0")
     viewer_host = _setting("OBSERVATORY_VIEWER_HOST", "127.0.0.1")
-    viewer_port = _port("OBSERVATORY_VIEWER_PORT", "8765")
+    viewer_port = _port("OBSERVATORY_VIEWER_PORT", "0")
     timeout = _positive_seconds("OBSERVATORY_STARTUP_TIMEOUT_SECONDS", "15")
     show_content = _show_content()
     workspace = _workspace(cwd)
@@ -407,22 +438,24 @@ def _run() -> int:
             ),
         }
     )
-    app_url = f"ws://{app_host}:{app_port}"
-    app_ready_url = f"http://{app_host}:{app_port}/readyz"
-    viewer_url = f"http://{viewer_host}:{viewer_port}"
+    requested_app_url = f"ws://{app_host}:{app_port}"
     app_process: subprocess.Popen[object] | None = None
     viewer_process: subprocess.Popen[object] | None = None
     tui_status = 0
     try:
         with app_log.open("w", encoding="utf-8") as log:
             app_process = subprocess.Popen(
-                [str(codex_bin), "app-server", "--listen", app_url],
+                [str(codex_bin), "app-server", "--listen", requested_app_url],
                 cwd=workspace,
                 env=environment,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
+        app_url = _wait_for_bound_url(
+            "Codex app server", "ws", app_process, app_log, timeout
+        )
+        app_ready_url = _app_server_ready_url(app_url)
         _wait_for_service("Codex app server", app_ready_url, app_process, app_log, timeout)
         viewer_arguments = [
             str(Path(__file__).resolve().parent.parent / "tools" / "trace_viewer.py"),
@@ -444,6 +477,9 @@ def _run() -> int:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
+        viewer_url = _wait_for_bound_url(
+            "log web server", "http", viewer_process, viewer_log, timeout
+        )
         _wait_for_service("log web server", f"{viewer_url}/", viewer_process, viewer_log, timeout)
         print(f"Codex app server started at {app_url}.")
         print(f"Log web server started at {viewer_url}.")

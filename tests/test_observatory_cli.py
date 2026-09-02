@@ -90,6 +90,45 @@ class ObservatoryCliTest(unittest.TestCase):
             self.assertEqual(cli.main(["--desktop"]), 2)
         self.assertIn("source checkout only", output.getvalue())
 
+    def test_automatic_ports_and_reported_addresses(self):
+        process = mock.Mock()
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as temporary:
+            app_log = Path(temporary) / "app-server.log"
+            app_log.write_text(
+                "codex app-server (WebSockets)\n"
+                "  listening on: ws://127.0.0.1:43123\n"
+                "  readyz: http://127.0.0.1:43123/readyz\n",
+                encoding="utf-8",
+            )
+            viewer_log = Path(temporary) / "trace-viewer.log"
+            viewer_log.write_text(
+                "Codex Harness Observatory: http://127.0.0.1:51234\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(cli._port("OBSERVATORY_APP_SERVER_PORT", "0"), 0)
+                self.assertEqual(cli._port("OBSERVATORY_VIEWER_PORT", "0"), 0)
+            app_url = cli._wait_for_bound_url(
+                "Codex app server", "ws", process, app_log, 0.1
+            )
+            viewer_url = cli._wait_for_bound_url(
+                "log web server", "http", process, viewer_log, 0.1
+            )
+
+        self.assertEqual(app_url, "ws://127.0.0.1:43123")
+        self.assertEqual(
+            cli._app_server_ready_url(app_url), "http://127.0.0.1:43123/readyz"
+        )
+        self.assertEqual(viewer_url, "http://127.0.0.1:51234")
+
+    def test_explicit_port_override_is_preserved(self):
+        with mock.patch.dict(
+            os.environ, {"OBSERVATORY_VIEWER_PORT": "8765"}, clear=True
+        ):
+            self.assertEqual(cli._port("OBSERVATORY_VIEWER_PORT", "0"), 8765)
+
     def test_installs_secure_package_once_and_reuses_it(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -44,8 +44,11 @@ The verified release Core is placed below
 `ROOT/.codex-configure/observatory`. The package does not build the Rust fork
 on first run. Its downloaded Core is checked before use and is kept separate
 from the system Codex installation. The installed route currently launches
-the patched TUI and local trace viewer; Desktop remains a source-checkout
-route because it requires the separately built Desktop candidate.
+the patched TUI and local trace viewer on operating-system-selected loopback
+ports and prints their resolved URLs. `OBSERVATORY_APP_SERVER_PORT` and
+`OBSERVATORY_VIEWER_PORT` remain available when a fixed port is useful; `0`
+selects a free port. Desktop remains a source-checkout route because it
+requires the separately built Desktop candidate.
 
 ### Source checkout route
 

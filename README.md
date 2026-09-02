@@ -39,7 +39,10 @@ options.
 The verified observatory Core is installed below
 `ROOT/.codex-configure/observatory`. Run directories, traces, service logs,
 and related state stay below that root. The launcher starts the patched TUI
-and local trace viewer, then retains the run artifacts when the session ends.
+and local trace viewer on operating-system-selected loopback ports, prints both
+resolved URLs, then retains the run artifacts when the session ends. Set
+`OBSERVATORY_APP_SERVER_PORT` or `OBSERVATORY_VIEWER_PORT` to pin either port;
+the value `0` requests automatic selection.
 
 ## Quickstart: source checkout
 
