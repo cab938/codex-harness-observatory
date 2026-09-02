@@ -1,0 +1,272 @@
+name: observatory-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing draft GitHub release tag to build, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: observatory-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  TARGET: x86_64-unknown-linux-gnu
+  CODEX_VERSION: 0.150.0-alpha.12.2
+
+jobs:
+  build-and-upload:
+    name: Build and upload Linux observatory release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out the requested release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate draft release, tag, and package version
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "Invalid release tag: $RELEASE_TAG" >&2; exit 1; }
+
+          is_draft="$(gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+          [[ "$is_draft" == "true" ]] \
+            || { echo "Release $RELEASE_TAG must already exist and be a draft" >&2; exit 1; }
+
+          package_version="$(python3 - <<'PY'
+          from pathlib import Path
+          import tomllib
+
+          with Path("pyproject.toml").open("rb") as stream:
+              print(tomllib.load(stream)["project"]["version"])
+          PY
+          )"
+          [[ "$RELEASE_TAG" == "v${package_version}" ]] \
+            || { echo "Release tag $RELEASE_TAG does not match package version $package_version" >&2; exit 1; }
+
+          head_commit="$(git rev-parse HEAD)"
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          [[ "$head_commit" == "$tag_commit" ]] \
+            || { echo "Checked-out HEAD $head_commit is not ${RELEASE_TAG} ($tag_commit)" >&2; exit 1; }
+
+          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
+          echo "Release $RELEASE_TAG is a draft at $head_commit (package $package_version)"
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            binutils libcap-dev pkg-config ripgrep
+
+      - name: Set up repository Rust toolchain
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          toolchain: 1.95.0
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Set up rusty_v8 artifacts
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: x86_64-unknown-linux-gnu
+
+      - name: Build bwrap first and export its digest
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          cargo build --target "$TARGET" --release --bin bwrap
+
+          bwrap_path="target/$TARGET/release/bwrap"
+          [[ -x "$bwrap_path" ]] || { echo "Missing $bwrap_path" >&2; exit 1; }
+          strip --strip-debug --strip-unneeded "$bwrap_path"
+          bwrap_sha256="$(sha256sum "$bwrap_path" | awk '{print $1}')"
+          echo "CODEX_BWRAP_SHA256=$bwrap_sha256" >> "$GITHUB_ENV"
+          echo "Built stripped bwrap with sha256:$bwrap_sha256"
+
+      - name: Build patched Codex and code-mode host
+        working-directory: codex-rs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --target "$TARGET" --release \
+            --bin codex --bin codex-code-mode-host
+
+      - name: Verify binary version and app-server lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          codex_bin="$GITHUB_WORKSPACE/codex-rs/target/$TARGET/release/codex"
+          expected="codex-cli $CODEX_VERSION"
+          actual="$($codex_bin --version)"
+          [[ "$actual" == "$expected" ]] \
+            || { echo "Expected '$expected', got '$actual'" >&2; exit 1; }
+
+          codex_home="$(mktemp -d)"
+          server_log="$RUNNER_TEMP/observatory-app-server.log"
+          port=18765
+          CODEX_HOME="$codex_home" "$codex_bin" app-server \
+            --listen "ws://127.0.0.1:$port" >"$server_log" 2>&1 &
+          server_pid=$!
+          stop_server() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap stop_server EXIT
+
+          ready=false
+          for _ in $(seq 1 60); do
+            if curl --fail --silent "http://127.0.0.1:$port/readyz" >/dev/null; then
+              ready=true
+              break
+            fi
+            kill -0 "$server_pid" 2>/dev/null || break
+            sleep 1
+          done
+          [[ "$ready" == "true" ]] || {
+            echo "app-server did not become ready" >&2
+            sed -n '1,160p' "$server_log" >&2
+            exit 1
+          }
+          stop_server
+          trap - EXIT
+          echo "Verified codex version and app-server start/ready/stop under $codex_home"
+
+      - name: Build canonical Codex package archive
+        id: core
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.release.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/core
+          package_dir="$RUNNER_TEMP/codex-package"
+          archive="dist/core/codex-harness-observatory-core-${PACKAGE_VERSION}-${TARGET}.tar.gz"
+          CODEX_REPO_ROOT="$GITHUB_WORKSPACE" python3 scripts/build_codex_package.py \
+            --target "$TARGET" \
+            --variant codex \
+            --package-version "$CODEX_VERSION" \
+            --package-dir "$package_dir" \
+            --archive-output "$archive" \
+            --entrypoint-bin "$GITHUB_WORKSPACE/codex-rs/target/$TARGET/release/codex" \
+            --code-mode-host-bin "$GITHUB_WORKSPACE/codex-rs/target/$TARGET/release/codex-code-mode-host" \
+            --bwrap-bin "$GITHUB_WORKSPACE/codex-rs/target/$TARGET/release/bwrap" \
+            --rg-bin "$(command -v rg)" \
+            --force
+          sidecar="$archive.sha256"
+          (cd "$(dirname "$archive")" && sha256sum "$(basename "$archive")" > "$(basename "$sidecar")")
+          (cd "$(dirname "$archive")" && sha256sum -c "$(basename "$sidecar")")
+
+          tar -tzf "$archive" > "$RUNNER_TEMP/core-contents.txt"
+          for required in \
+            codex-package.json \
+            bin/codex \
+            bin/codex-code-mode-host \
+            codex-resources/bwrap \
+            codex-path/rg; do
+            grep -Fxq "$required" "$RUNNER_TEMP/core-contents.txt" \
+              || { echo "Canonical package is missing $required" >&2; exit 1; }
+          done
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "archive_sha256=$sidecar" >> "$GITHUB_OUTPUT"
+
+      - name: Build and validate Python distribution
+        id: python
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.release.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/package-venv"
+          "$RUNNER_TEMP/package-venv/bin/python" -m pip install --upgrade build twine
+          python_dir="dist/python"
+          mkdir -p "$python_dir"
+          "$RUNNER_TEMP/package-venv/bin/python" -m build --sdist --wheel --outdir "$python_dir" .
+          "$RUNNER_TEMP/package-venv/bin/python" -m twine check "$python_dir"/*.whl "$python_dir"/*.tar.gz
+
+          wheel="$(find "$python_dir" -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          [[ -n "$wheel" ]] || { echo "Python wheel was not built" >&2; exit 1; }
+          sdist="$(find "$python_dir" -maxdepth 1 -type f -name '*.tar.gz' -print -quit)"
+          [[ -n "$sdist" ]] || { echo "Python sdist was not built" >&2; exit 1; }
+          WHEEL="$wheel" PACKAGE_VERSION="$PACKAGE_VERSION" \
+            "$RUNNER_TEMP/package-venv/bin/python" - <<'PY'
+          import os
+          from pathlib import Path
+          from email import message_from_bytes
+          from packaging.requirements import Requirement
+          from packaging.specifiers import SpecifierSet
+          from zipfile import ZipFile
+
+          wheel = Path(os.environ["WHEEL"])
+          with ZipFile(wheel) as archive:
+              names = archive.namelist()
+              metadata_name = next(
+                  name for name in names if name.endswith(".dist-info/METADATA")
+              )
+              metadata = message_from_bytes(archive.read(metadata_name))
+              requirements = metadata.get_all("Requires-Dist") or []
+              expected_requirement = SpecifierSet(">=0.5.1,<0.6")
+              parsed_requirements = [Requirement(value) for value in requirements]
+              if not any(
+                  requirement.name.lower() == "codex-configure"
+                  and requirement.specifier == expected_requirement
+                  for requirement in parsed_requirements
+              ):
+                  raise SystemExit(
+                      "wheel dependency missing codex-configure>=0.5.1,<0.6: "
+                      f"{requirements!r}"
+                  )
+
+              asset_suffixes = (".html", ".js", ".css")
+              assets = [
+                  name for name in names
+                  if name.lower().endswith(asset_suffixes)
+                  and ("viewer" in name.lower() or "web" in name.lower())
+              ]
+              if not assets:
+                  raise SystemExit("wheel contains no viewer web assets")
+              print(f"Verified {wheel.name}: codex-configure>=0.5.1,<0.6; assets={assets}")
+          PY
+          echo "wheel=$wheel" >> "$GITHUB_OUTPUT"
+          echo "sdist=$sdist" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-harness-observatory-${{ inputs.tag }}
+          path: |
+            dist/core/*
+            dist/python/*
+          if-no-files-found: error
+
+      - name: Upload release assets without overwriting existing files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            "${{ steps.core.outputs.archive }}" \
+            "${{ steps.core.outputs.archive_sha256 }}" \
+            "${{ steps.python.outputs.wheel }}" \
+            "${{ steps.python.outputs.sdist }}"

@@ -13,11 +13,50 @@ This is a research and teaching fork of the open Codex agent harness. Its purpos
 - Signed Desktop package: `26.825.32147`
 - Signed package SHA-256: `986d38b690dd0310933ce61175b09c27434001f4e114332bb0f7b6ffdc3ca406`
 
-This repository intentionally has no Git remote. The exact Core and Desktop
-pins above are also enforced by `.env`, `run.sh`, and
-`build-desktop-observatory.sh`; the teaching launcher fails closed when the
+The exact Core and Desktop pins above are also enforced by `.env`, `run.sh`,
+and `build-desktop-observatory.sh`; the teaching launcher fails closed when the
 source tag/commit, development and bundled Core reported versions, signed
 package version, or package digest does not match the declared teaching set.
+
+## Launch routes
+
+There are two supported teaching routes. Both are intended for Linux x86_64
+and both retain traces and service logs under the selected teaching root.
+
+### Installed TUI route
+
+The installed package is the short path for a fresh teaching directory. Until
+PyPI publication, install the wheel from the latest GitHub release as
+described in the repository README; the eventual command is
+`pipx install codex-harness-observatory`.
+
+On the first invocation in a directory, the package runs the interactive,
+exact-current-directory `codex-configure init` flow. Select Stock/OpenAI when
+asked for a configuration. This project depends on
+`codex-configure>=0.5.1,<0.6` only for its rooting and launch mechanisms; it
+does not use the provider-patching feature. Once initialization is complete,
+the package re-enters through `codex-configure launch -- ...`. The `--` marks
+the arbitrary-command launch primitive: the remaining arguments are executed
+directly with the rooted environment, preserving the caller's working
+directory, signals, and exit status.
+
+The verified release Core is placed below
+`ROOT/.codex-configure/observatory`. The package does not build the Rust fork
+on first run. Its downloaded Core is checked before use and is kept separate
+from the system Codex installation. The installed route currently launches
+the patched TUI and local trace viewer; Desktop remains a source-checkout
+route because it requires the separately built Desktop candidate.
+
+### Source checkout route
+
+The checked-in `run.sh` remains the development and Desktop teaching entry
+point. From this repository, build the patched Core with
+`(cd codex-rs && cargo build -j 1 -p codex-cli)`, then use `./run.sh` for the
+TUI or `./run.sh --desktop` for the shared-run Desktop route. Desktop also
+requires the external `codex-desktop-linux` checkout and the signed package
+prerequisite described in the Desktop sections below. This route is useful
+when changing the Core or trace viewer and keeps all source-build details
+visible to students.
 
 ## Boundary
 

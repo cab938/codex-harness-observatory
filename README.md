@@ -1,81 +1,101 @@
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-<p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-</p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+# Codex Harness Observatory
 
----
+Codex Harness Observatory is a research and teaching fork of the Codex
+agent harness. It makes the local path from a task through App Server frames,
+model sampling, decisions, approvals, tools, MCP, and child-agent coordination
+visible in a filterable trace. It does not expose a model's private reasoning
+or instrument the Desktop renderer.
 
-## Quickstart
+## Quickstart: installed TUI
 
-### Installing and running Codex CLI
+The installed route is for Linux x86_64. Until this project publishes to PyPI,
+install the wheel asset from the latest GitHub release:
 
-Run the following on Mac or Linux to install Codex CLI:
-
-```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | sh
+```bash
+wheel_dir="$(mktemp -d)"
+gh release download --repo cab938/codex-harness-observatory \
+  --pattern 'codex_harness_observatory-*.whl' --dir "$wheel_dir"
+pipx install "$wheel_dir"/codex_harness_observatory-*.whl
+mkdir my-observatory-run
+cd my-observatory-run
+codex-harness-observatory
 ```
 
-Run the following on Windows to install Codex CLI:
+The intended PyPI installation, once published, is:
 
-```shell
-powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
+```bash
+pipx install codex-harness-observatory
 ```
 
-The standalone installers download from `https://releases.openai.com/codex` by default and fall back to GitHub Releases if a metadata or asset download is unavailable. To force GitHub Releases, set `CODEX_INSTALLER_USE_RELEASES_OPENAI_COM` to `false` (`0` and `no` are also accepted):
+On its first run in a directory, the launcher interactively invokes
+`codex-configure init` for that exact current directory. Choose the
+Stock/OpenAI configuration during initialization. The observatory does not
+use `codex-configure`'s provider-patching capability. After initialization it
+re-enters through `codex-configure launch -- ...`, which supplies the rooted
+environment and executes the selected command directly. Later runs reuse the
+same root; use `codex-harness-observatory --help` for the available launcher
+options.
 
-```shell
-curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_INSTALLER_USE_RELEASES_OPENAI_COM=false sh
+The verified observatory Core is installed below
+`ROOT/.codex-configure/observatory`. Run directories, traces, service logs,
+and related state stay below that root. The launcher starts the patched TUI
+and local trace viewer, then retains the run artifacts when the session ends.
+
+## Quickstart: source checkout
+
+The source route is useful when teaching from or modifying this repository:
+
+```bash
+git clone https://github.com/cab938/codex-harness-observatory.git
+cd codex-harness-observatory
+(cd codex-rs && cargo build -j 1 -p codex-cli)
+./run.sh                 # patched TUI plus local viewer
+./run.sh --desktop       # optional Desktop teaching route
 ```
 
-```powershell
-$env:CODEX_INSTALLER_USE_RELEASES_OPENAI_COM='false'; irm https://chatgpt.com/codex/install.ps1 | iex
-```
+The `--desktop` route additionally requires the separately checked-out and
+built `codex-desktop-linux` candidate. See
+[`HARNESS_OBSERVATORY.md`](HARNESS_OBSERVATORY.md) and
+[`DESKTOP_OBSERVATORY_PLAN.md`](DESKTOP_OBSERVATORY_PLAN.md) for the exact
+Desktop prerequisite and bridge details.
 
-Codex CLI can also be installed via the following package managers:
+## What the viewer shows
 
-```shell
-# Install using npm
-npm install -g @openai/codex
-```
+Each run stores a trace bundle containing `manifest.json`, `trace.jsonl`,
+`payloads/`, and, after reduction, `state.json`. The viewer can filter raw
+transport packets and harness events by thread, turn, step, category, method,
+phase, and correlation. It can also check trace-integrity invariants and serve
+a live local browser view. The detailed event families and examples are in
+[`HARNESS_OBSERVATORY.md`](HARNESS_OBSERVATORY.md).
 
-```shell
-# Install using Homebrew
-brew install --cask codex
-```
+The default teaching viewer is private full-content evidence: prompts,
+responses, tool arguments and results, paths, and raw App Server/MCP frames
+may be shown. Review a bundle before sharing it. Set
+`OBSERVATORY_SHOW_CONTENT=0` for metadata-only TUI viewing, or use the
+viewer's `--redact-content` option.
 
-Then simply run `codex` to get started.
+## Provenance and boundaries
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+This repository is pinned to upstream Codex tag
+`rust-v0.150.0-alpha.12.2` at commit
+`a9802304f60ab14c0b07e3ee0db9a9c105ab0cb3`, with the observatory patches
+applied on top. The source launcher and installed launcher use that same
+teaching Core version when verifying artifacts.
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+This is light isolation, not a security sandbox. It separates Codex state,
+configuration, Desktop/Chrome-related state, and observatory traces for a
+teaching directory, but it does not protect against a process with access to
+the same user account or host. Do not use the full-content route for ordinary
+private work without reviewing its retention and sharing implications.
 
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+## Development and builds
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+The source checkout is the canonical development surface. Build the patched
+Core with `cargo build -j 1 -p codex-cli`; the GitHub workflow builds the
+Linux x86_64 release Core and the installable Python wheel. The package
+depends on `codex-configure>=0.5.1,<0.6` for rooted launch behavior and does
+not apply its provider patch. Keep the source and signed Desktop provenance
+pins in `.env` aligned when changing the teaching set.
 
-</details>
-
-### Using Codex with your ChatGPT plan
-
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Business, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
-
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
-
-## Docs
-
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
-
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+The full trace schema, launch contracts, focused verification history, and
+Desktop bridge notes live in [`HARNESS_OBSERVATORY.md`](HARNESS_OBSERVATORY.md).
