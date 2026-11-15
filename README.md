@@ -1,104 +1,57 @@
 # Codex Harness Observatory
 
-Codex Harness Observatory is a research and teaching fork of the Codex
-agent harness. It makes the local path from a task through App Server frames,
-model sampling, decisions, approvals, tools, MCP, and child-agent coordination
-visible in a filterable trace. It does not expose a model's private reasoning
-or instrument the Desktop renderer.
+A local teaching tool for exploring how Codex works. The CLI and Desktop feed one native recording pipeline, and the Observatory presents the captured events and full payloads for reflection and learning.
 
-## Quickstart: installed TUI
+The assembled native candidate supports Linux x86_64 with glibc 2.39 or newer. Python 3.11 or newer is required. Recorded runs can be explored on any platform with that Python version.
 
-The installed route is for Linux x86_64. Until this project publishes to PyPI,
-install the wheel asset from the latest GitHub release:
+## Run
+
+An assembled distribution contains both instrumented Core and the patched Desktop. Extract it and run:
 
 ```bash
-wheel_dir="$(mktemp -d)"
-gh release download --repo cab938/codex-harness-observatory \
-  --pattern 'codex_harness_observatory-*.whl' --dir "$wheel_dir"
-pipx install "$wheel_dir"/codex_harness_observatory-*.whl
-mkdir my-observatory-run
-cd my-observatory-run
-codex-harness-observatory
+./observatory --client desktop \
+  --codex-home ~/.observatory/profiles/umich \
+  --runs-dir ./recordings
 ```
 
-The intended PyPI installation, once published, is:
+Use `--client cli` for the terminal client. Both clients print the URL of the live Observatory. Open that URL in a browser to explore the recording.
+
+`--codex-home` defaults to `~/.observatory/profiles/main`. It is a complete, persistent Codex home, including configuration and MCP definitions. Missing homes are created; existing configuration is reused. Desktop application state is kept with the selected home. Complete any initial Codex setup using that home.
+
+`--runs-dir` defaults to `~/.observatory/runs`. Every invocation creates a new run directory containing `manifest.json`, `trace.jsonl`, `payloads/`, and diagnostic logs. Relative paths resolve from the directory where you invoke the command. CLI tasks use that working directory; Desktop retains its usual project selection.
+
+Stop the client when finished. The launcher stops its associated processes and retains the selected home and recordings.
+
+Desktop needs working Chromium sandbox support. On Ubuntu systems that restrict user namespaces, an unpacked application may need an AppArmor profile for its exact executable path. The [development guide](docs/development.md) describes the VM setup used for testing.
+
+## Explore a recorded run
 
 ```bash
-pipx install codex-harness-observatory
+./observatory replay ./recordings/RUN_ID
 ```
 
-On its first run in a directory, the launcher interactively invokes
-`codex-configure init` for that exact current directory. Choose the
-Stock/OpenAI configuration during initialization. The observatory does not
-use `codex-configure`'s provider-patching capability. After initialization it
-re-enters through `codex-configure launch -- ...`, which supplies the rooted
-environment and executes the selected command directly. Later runs reuse the
-same root; use `codex-harness-observatory --help` for the available launcher
-options.
+Replay also accepts an exported ZIP or a `trace.jsonl` path. It displays full content and reads the recording without changing it.
 
-The verified observatory Core is installed below
-`ROOT/.codex-configure/observatory`. Run directories, traces, service logs,
-and related state stay below that root. The launcher starts the patched TUI
-and local trace viewer on operating-system-selected loopback ports, prints both
-resolved URLs, then retains the run artifacts when the session ends. Set
-`OBSERVATORY_APP_SERVER_PORT` or `OBSERVATORY_VIEWER_PORT` to pin either port;
-the value `0` requests automatic selection.
+## Source layout
 
-## Quickstart: source checkout
-
-The source route is useful when teaching from or modifying this repository:
-
-```bash
-git clone https://github.com/cab938/codex-harness-observatory.git
-cd codex-harness-observatory
-(cd codex-rs && cargo build -j 1 -p codex-cli)
-./run.sh                 # patched TUI plus local viewer
-./run.sh --desktop       # optional Desktop teaching route
+```text
+src/
+  launch.py           # Invocation, homes, runs, process lifecycle
+  observatory/        # Trace readers, exploration server, browser assets
+  scripts/            # Native packaging and assembled release scripts
+lib/
+  codex/              # Pinned instrumented Codex source
+patches/
+  desktop/            # Remaining Desktop transforms
+tests/
+  fixtures/           # Small synthetic recordings
+docs/                 # Development process and historical design documents
+release.json          # Source, package, patch, and artifact pins
+build/                # Ignored runtime, packages, and development evidence
 ```
 
-The `--desktop` route additionally requires the separately checked-out and
-built `codex-desktop-linux` candidate. See
-[`HARNESS_OBSERVATORY.md`](HARNESS_OBSERVATORY.md) and
-[`DESKTOP_OBSERVATORY_PLAN.md`](DESKTOP_OBSERVATORY_PLAN.md) for the exact
-Desktop prerequisite and bridge details.
+The native source keeps CLI, Core, App Server, and capture together in their upstream workspace. The main project owns visualization, rooted launch, and packaging. Recordings use the project's local event log with full payloads.
 
-## What the viewer shows
+For a source checkout, initialize the pinned native source with `git submodule update --init --recursive`, then follow the development guide to build the matched runtimes.
 
-Each run stores a trace bundle containing `manifest.json`, `trace.jsonl`,
-`payloads/`, and, after reduction, `state.json`. The viewer can filter raw
-transport packets and harness events by thread, turn, step, category, method,
-phase, and correlation. It can also check trace-integrity invariants and serve
-a live local browser view. The detailed event families and examples are in
-[`HARNESS_OBSERVATORY.md`](HARNESS_OBSERVATORY.md).
-
-The default teaching viewer is private full-content evidence: prompts,
-responses, tool arguments and results, paths, and raw App Server/MCP frames
-may be shown. Review a bundle before sharing it. Set
-`OBSERVATORY_SHOW_CONTENT=0` for metadata-only TUI viewing, or use the
-viewer's `--redact-content` option.
-
-## Provenance and boundaries
-
-This repository is pinned to upstream Codex tag
-`rust-v0.150.0-alpha.12.2` at commit
-`a9802304f60ab14c0b07e3ee0db9a9c105ab0cb3`, with the observatory patches
-applied on top. The source launcher and installed launcher use that same
-teaching Core version when verifying artifacts.
-
-This is light isolation, not a security sandbox. It separates Codex state,
-configuration, Desktop/Chrome-related state, and observatory traces for a
-teaching directory, but it does not protect against a process with access to
-the same user account or host. Do not use the full-content route for ordinary
-private work without reviewing its retention and sharing implications.
-
-## Development and builds
-
-The source checkout is the canonical development surface. Build the patched
-Core with `cargo build -j 1 -p codex-cli`; the GitHub workflow builds the
-Linux x86_64 release Core and the installable Python wheel. The package
-depends on `codex-configure>=0.5.1,<0.6` for rooted launch behavior and does
-not apply its provider patch. Keep the source and signed Desktop provenance
-pins in `.env` aligned when changing the teaching set.
-
-The full trace schema, launch contracts, focused verification history, and
-Desktop bridge notes live in [`HARNESS_OBSERVATORY.md`](HARNESS_OBSERVATORY.md).
+See [development and testing](docs/development.md) for the VM build and local-model workflow, and [discussion notes](docs/discussion.md) for the requirements and design decisions. Most earlier documents in [docs](docs/README.md) are historical.

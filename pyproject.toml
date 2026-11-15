@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-harness-observatory"
-version = "0.1.1"
+dynamic = ["version"]
 description = "A lightly isolated, telemetry-enabled Codex harness for teaching."
 authors = [{ name = "Christopher Brooks" }]
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.11"
-dependencies = ["codex-configure>=0.5.1,<0.6"]
+dependencies = []
 keywords = ["codex", "teaching", "observability"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -22,14 +22,22 @@ classifiers = [
 ]
 
 [project.scripts]
-codex-harness-observatory = "codex_harness_observatory.cli:main"
+observatory = "launch:main"
 
 [project.urls]
 Homepage = "https://github.com/cab938/codex-harness-observatory"
 Repository = "https://github.com/cab938/codex-harness-observatory.git"
 
 [tool.setuptools]
-packages = ["codex_harness_observatory", "tools"]
+package-dir = {"" = "src"}
+packages = ["observatory"]
+py-modules = ["launch"]
+
+[tool.setuptools.dynamic]
+version = {attr = "observatory.release.VERSION"}
 
 [tool.setuptools.package-data]
-tools = ["trace_viewer_web/*.html", "trace_viewer_web/*.js", "trace_viewer_web/*.css"]
+observatory = ["collection_inventory.json", "desktop_core_bridge.sh", "web/*.html", "web/*.js", "web/*.css"]
+
+[tool.setuptools.data-files]
+"share/codex-harness-observatory" = ["release.json"]

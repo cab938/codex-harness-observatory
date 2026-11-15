@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Codex Harness Observatory</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Harness Observatory</h1>
+      <div class="topbar-tools">
+        <span class="private-evidence" data-testid="private-evidence">Private full evidence</span>
+        <div class="connection-status" data-state="connecting" data-testid="connection-status">
+          <span class="status-light" aria-hidden="true"></span>
+          <span id="connection-label">Connecting</span>
+        </div>
+        <details class="trace-details">
+          <summary>Trace details</summary>
+          <dl class="trace-meta" aria-label="Trace metadata">
+            <div><dt>Trace</dt><dd id="meta-trace" data-testid="meta-trace">-</dd></div>
+            <div><dt>Rollout</dt><dd id="meta-rollout">-</dd></div>
+            <div><dt>Root thread</dt><dd id="meta-root">-</dd></div>
+            <div><dt>Started</dt><dd id="meta-started">-</dd></div>
+            <div><dt>Capture</dt><dd id="meta-format">-</dd></div>
+            <div><dt>Manifest</dt><dd><details id="manifest-details"><summary>Inspect metadata</summary><pre id="meta-manifest"></pre></details></dd></div>
+          </dl>
+        </details>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="filter-panel" aria-labelledby="filter-title">
+        <div class="panel-heading">
+          <h2 id="filter-title">Filters</h2>
+          <button class="text-button" type="button" id="reset-filters" data-testid="reset-filters" disabled>Reset</button>
+        </div>
+        <label class="field">
+          <span>Search</span>
+          <input id="search-filter" data-testid="search-filter" type="search" placeholder="ID, event, outcome">
+        </label>
+        <div class="field category-field">
+          <span id="category-filter-label">Category</span>
+          <details id="category-filter" class="category-filter" data-testid="category-filter" aria-labelledby="category-filter-label">
+            <summary id="category-filter-summary">All categories</summary>
+            <div id="category-options" class="category-options" role="group" aria-labelledby="category-filter-label"></div>
+          </details>
+        </div>
+        <label class="field">
+          <span>Event or tool</span>
+          <select id="name-filter" data-testid="name-filter">
+            <option value="">All event names</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Phase</span>
+          <select id="phase-filter" data-testid="phase-filter">
+            <option value="">All phases</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Packet type</span>
+          <select id="payload-filter" data-testid="payload-filter">
+            <option value="">All packet types</option>
+          </select>
+        </label>
+        <label class="toggle-row">
+          <input id="harness-only-filter" data-testid="harness-only-filter" type="checkbox">
+          <span>Harness events only</span>
+        </label>
+        <details class="filter-disclosure">
+          <summary>Identifiers</summary>
+          <label class="field">
+            <span>Thread</span>
+            <select id="thread-filter" data-testid="thread-filter">
+              <option value="">All threads</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Turn</span>
+            <select id="turn-filter" data-testid="turn-filter">
+              <option value="">All turns</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Agent step</span>
+            <select id="step-filter" data-testid="step-filter">
+              <option value="">All steps</option>
+            </select>
+          </label>
+        </details>
+        <details class="filter-disclosure">
+          <summary>Correlation</summary>
+          <label class="field">
+            <span>Key</span>
+            <select id="correlation-key-filter" data-testid="correlation-key-filter">
+              <option value="">Any key</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Value</span>
+            <input id="correlation-value-filter" data-testid="correlation-value-filter" type="search" placeholder="Exact or partial ID">
+          </label>
+        </details>
+      </aside>
+
+      <section class="timeline-panel" aria-labelledby="timeline-title">
+        <div class="panel-heading timeline-heading">
+          <h2 id="timeline-title">Events</h2>
+          <div class="timeline-tools">
+            <div class="stream-counts" aria-live="polite">
+              <strong id="matched-count" data-testid="matched-count">0</strong><span id="count-label"> events</span>
+              <span id="received-context" hidden> of <span id="received-count" data-testid="received-count">0</span></span>
+              <span id="buffered-count" data-testid="buffered-count" hidden></span>
+            </div>
+            <div class="stream-actions">
+              <button type="button" class="control-button" id="follow-live" data-testid="follow-live" aria-pressed="true">Follow</button>
+              <button type="button" class="control-button primary" id="pause-stream" data-testid="pause-stream" aria-pressed="false">Pause</button>
+            </div>
+          </div>
+        </div>
+        <div id="capture-diagnostic" class="capture-diagnostic" data-testid="capture-diagnostic" hidden role="status" aria-live="polite"></div>
+        <div id="stream-notice" class="stream-notice" hidden role="status"></div>
+        <section class="task-lane-panel" aria-labelledby="task-lane-title">
+          <div class="task-lane-heading">
+            <h3 id="task-lane-title">Task lanes</h3>
+            <span id="task-concurrency-summary">Raw sequence</span>
+          </div>
+          <div id="task-focus-controls" class="task-focus-controls" data-testid="task-focus-controls" role="group" aria-label="Task focus"></div>
+          <div id="task-tree" class="task-tree" data-testid="task-tree" aria-label="Task and child-agent relationships"></div>
+        </section>
+        <div class="event-columns" aria-hidden="true">
+          <span>#</span>
+          <span>Time</span>
+          <span>Event</span>
+          <span>Lane</span>
+          <span>Type</span>
+          <span>Phase</span>
+        </div>
+        <ol id="event-list" class="event-list" data-testid="event-list" aria-label="Trace events"></ol>
+        <div id="empty-state" class="empty-state">Waiting for events</div>
+      </section>
+
+      <aside class="detail-panel" aria-labelledby="detail-title">
+        <div class="panel-heading">
+          <h2 id="detail-title">Detail</h2>
+        </div>
+        <div id="detail-empty" class="detail-empty">Select an event</div>
+        <div id="detail-content" class="detail-content" hidden>
+          <section class="event-overview" aria-labelledby="detail-event-title">
+            <div class="event-title-row">
+              <h3 id="detail-event-title" data-testid="detail-event-title"></h3>
+              <div class="event-classification">
+                <span id="detail-category"></span>
+                <span id="detail-phase"></span>
+              </div>
+            </div>
+            <p id="detail-description" class="detail-description"></p>
+            <dl id="detail-facts" class="detail-facts"></dl>
+            <details id="identifier-details" class="identifier-details" hidden>
+              <summary>Identifiers</summary>
+              <dl id="detail-identifiers" class="detail-facts identifier-facts"></dl>
+            </details>
+          </section>
+
+          <section id="evidence-section" class="evidence-section" aria-labelledby="evidence-title" hidden>
+            <h3 id="evidence-title">Artifacts</h3>
+            <div id="artifact-links" class="artifact-links" data-testid="artifact-links"></div>
+          </section>
+
+          <section id="artifact-viewer" class="artifact-viewer" aria-labelledby="artifact-title" hidden>
+            <div class="artifact-heading">
+              <h3 id="artifact-title" data-testid="artifact-title"></h3>
+              <span id="artifact-meta" class="artifact-meta"></span>
+            </div>
+            <div id="patch-explanation" class="patch-explanation" data-testid="patch-explanation" hidden>
+              <strong>Internal Codex patch tool</strong>
+              <span>This is handled by Codex's built-in patch machinery, not by a shell command or MCP server.</span>
+              <div id="patch-files" class="patch-files"></div>
+              <pre id="patch-content" class="patch-content" data-testid="patch-content" tabindex="0" hidden></pre>
+            </div>
+            <details class="artifact-envelope" open>
+              <summary>Original artifact</summary>
+              <pre id="artifact-content" data-testid="artifact-content" tabindex="0"></pre>
+            </details>
+            <details id="artifact-formatted" class="artifact-envelope" hidden>
+              <summary>Formatted JSON</summary>
+              <p class="artifact-format-note">Formatting and JavaScript numbers can differ from the original. Use the original artifact for exact text or bytes.</p>
+              <pre id="artifact-formatted-content" data-testid="artifact-formatted-content" tabindex="0"></pre>
+            </details>
+          </section>
+
+          <details class="event-envelope">
+            <summary>Full event envelope</summary>
+            <pre id="event-detail" data-testid="event-detail" tabindex="0"></pre>
+          </details>
+        </div>
+      </aside>
+    </main>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

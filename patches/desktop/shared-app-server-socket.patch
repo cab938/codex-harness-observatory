@@ -1,0 +1,97 @@
+diff --git a/linux-features/shared-app-server-socket/patch.js b/linux-features/shared-app-server-socket/patch.js
+index 96a94d39..f964e292 100644
+--- a/linux-features/shared-app-server-socket/patch.js
++++ b/linux-features/shared-app-server-socket/patch.js
+@@ -1,5 +1,8 @@
+ "use strict";
+ 
++const fs = require("node:fs");
++const path = require("node:path");
++
+ const { readSocketPath } = require("./socket-path.js");
+ const { escapeRegExp, findMatchingBrace } = require("../../scripts/patches/lib/minified-js.js");
+ 
+@@ -224,13 +227,28 @@ function applySharedAppServerSocketPatch(source) {
+   return source.slice(0, factoryStart) + classSource + patchedFactory + source.slice(factoryEnd);
+ }
+ 
++function patchExtractedApp(extractedDir) {
++  const buildDir = path.join(extractedDir, ".vite", "build");
++  const candidates = fs.readdirSync(buildDir).filter(name => name.endsWith(".js")).map(name => {
++    const bundlePath = path.join(buildDir, name);
++    return { bundlePath, source: fs.readFileSync(bundlePath, "utf8") };
++  }).filter(({ source }) => source.includes("AppServerTransportSshWebsocket") && source.includes("selected app-server transport"));
++  if (candidates.length !== 1) return { matched: 0, changed: 0, reason: "Expected one app-server transport bundle" };
++  const { bundlePath, source } = candidates[0];
++  const patched = applySharedAppServerSocketPatch(source);
++  if (!patched.includes("class CodexLinuxSharedAppServerSocketTransport")) return { matched: 0, changed: 0, reason: "Unsupported app-server transport factory" };
++  if (patched !== source) fs.writeFileSync(bundlePath, patched, "utf8");
++  return { matched: 1, changed: Number(patched !== source), targets: [path.relative(extractedDir, bundlePath)] };
++}
++
+ const descriptors = [
+   {
+     id: "main-process-shared-app-server-socket",
+-    phase: "main-bundle",
++    phase: "extracted-app:pre-webview",
+     order: 140,
+     ciPolicy: "optional",
+-    apply: applySharedAppServerSocketPatch,
++    apply: patchExtractedApp,
++    status: result => result?.matched === 1 ? (result.changed ? "applied" : "already-applied") : { status: "skipped-optional", reason: result?.reason },
+   },
+ ];
+ 
+@@ -238,5 +256,6 @@ module.exports = {
+   applySharedAppServerSocketPatch,
+   descriptors,
+   findTransportSymbols,
++  patchExtractedApp,
+   sharedTransportClassSource,
+ };
+diff --git a/linux-features/shared-app-server-socket/test.js b/linux-features/shared-app-server-socket/test.js
+index c1b80da9..6604babd 100755
+--- a/linux-features/shared-app-server-socket/test.js
++++ b/linux-features/shared-app-server-socket/test.js
+@@ -20,6 +20,7 @@ const {
+ const {
+   applySharedAppServerSocketPatch,
+   descriptors,
++  patchExtractedApp,
+   sharedTransportClassSource,
+ } = require("./patch.js");
+ 
+@@ -2144,10 +2145,10 @@ test(
+   },
+ );
+ 
+-test("descriptor is optional and targets the main bundle", () => {
++test("descriptor discovers the transport bundle before webview patches", () => {
+   assert.deepEqual(
+     descriptors.map(({ id, phase, ciPolicy }) => [id, phase, ciPolicy]),
+-    [["main-process-shared-app-server-socket", "main-bundle", "optional"]],
++    [["main-process-shared-app-server-socket", "extracted-app:pre-webview", "optional"]],
+   );
+ });
+ 
+@@ -3500,3 +3501,20 @@ test("stock Codex authority starts through the injected transport and supports v
+     fs.rmSync(tempDir, { recursive: true, force: true });
+   }
+ });
++
++
++test("extracted bundle patch targets the unique transport and rejects ambiguity", () => {
++  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "observatory-transport-"));
++  try {
++    const build = path.join(temp, ".vite", "build");
++    fs.mkdirSync(build, { recursive: true });
++    const file = path.join(build, "transport.js");
++    fs.writeFileSync(file, syntheticBundle());
++    assert.equal(patchExtractedApp(temp).changed, 1);
++    assert.equal(patchExtractedApp(temp).changed, 0);
++    fs.writeFileSync(path.join(build, "ambiguous.js"), syntheticBundle());
++    assert.equal(patchExtractedApp(temp).matched, 0);
++  } finally {
++    fs.rmSync(temp, { recursive: true, force: true });
++  }
++});

@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "observatory": {
+    "version": "0.4.0",
+    "release_tag": "v0.4.0",
+    "base_url": "https://github.com/cab938/codex-harness-observatory/releases/download/v0.4.0"
+  },
+  "core": {
+    "version": "0.169.0",
+    "upstream_tag": "rust-v0.169.0",
+    "upstream_commit": "d32063f96c2dff1dc96af839b3952abb6acfeda4",
+    "target": "x86_64-unknown-linux-gnu",
+    "v8": {
+      "crate_version": "152.2.0",
+      "rusty_v8_commit": "90a65f887a0c0f048f3784afbcb320b373c8a2e0",
+      "engine_version": "15.2.124.1",
+      "engine_commit": "c4ca1eccb90c5464d826b7713dc27178a53b0cfe",
+      "profile": "sandbox_release",
+      "bazel_platform": "@llvm//platforms:linux_amd64",
+      "bazel_version": "9.2.0",
+      "bazel_sha256": "7668a95db1250f12c40407251e4e203b4ec8bf39bc495d2f485b2d8c99048694",
+      "archive_sha256": "b3b490f2aa809eda7f6ac727f851fb00ce8355be72827577cfaac28c7137dbcd",
+      "published_binding_sha256": "3e4d5fecdbe0f98a6017e69d7ca82519a77fb032c5eb5e4cdbecdd3e2ec519d5",
+      "binding_sha256": "dc81049e515ab0a7568779c7f0cbc1db330c2927c67e0f6d0a25a0dab203ccb5"
+    },
+    "observatory_patch_sha256": "c8b57ff87eaa117d9f839819995483f343dd26327f6018434fba82275188d346",
+    "instrumented_commit": "008448a4e778564b7505d5e35095efaf1f8a6896"
+  },
+  "desktop": {
+    "version": "26.1111.21308",
+    "package_sha256": "4b443bc557350a1b193bc2f1bae207c9ea3c9fb5d94f7c94a5d3dbaa8b552352",
+    "companion_repository": "https://github.com/ilysenko/codex-desktop-linux.git",
+    "companion_commit": "952d165bb76227672078bc0310c7e18b2616d9d1",
+    "feature_patch_sha256": "7e7878789a2b097f6cc4af9e0e878c5e55d347761f9a0aa3a24976d68ca54eb0",
+    "asar_version": "4.3.1",
+    "isolation_patch_sha256": "2ce5d2d49144eff76a4ece3eb73275011166dd1485fa9f99fc05759b924a6cb5",
+    "core_socket_policy": "profile-rendezvous-upstream-protected-physical-socket",
+    "bundled_core_version": "0.169.0-alpha.11.1"
+  },
+  "artifacts": {
+    "core": {
+      "name": "codex-harness-observatory-core-0.4.0-x86_64-unknown-linux-gnu.tar.gz",
+      "url": "https://github.com/cab938/codex-harness-observatory/releases/download/v0.4.0/codex-harness-observatory-core-0.4.0-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "e36a812f45cc7a441783f94c33fc15d475c07133d66cca6dd291c197472d576d"
+    },
+    "desktop": {
+      "name": "codex-harness-observatory-desktop-0.4.0-linux-x86_64.tar.gz",
+      "url": "https://github.com/cab938/codex-harness-observatory/releases/download/v0.4.0/codex-harness-observatory-desktop-0.4.0-linux-x86_64.tar.gz",
+      "sha256": "2a69f72b988503655f36a6226e5504a27d22894c246bb5430b7debcab67739ba"
+    }
+  },
+  "capabilities": {
+    "raw_schema": 6,
+    "manifest_schema": 4,
+    "reduced_schema": 5,
+    "app_server_logical_frames": true,
+    "mcp_logical_frames": true,
+    "inference_prepared_requests": true,
+    "harness_events": true,
+    "writer_health": true,
+    "standalone_pre_root_restore_events": false
+  },
+  "runtime": {
+    "core": "build/runtime/core",
+    "desktop": "build/runtime/desktop"
+  }
+}

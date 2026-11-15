@@ -1,0 +1,818 @@
+{
+  "inventory_version": 1,
+  "collection_capabilities": {
+    "raw_schema": 6,
+    "manifest_schema": 4,
+    "reduced_schema": 5,
+    "app_server_logical_frames": true,
+    "mcp_logical_frames": true,
+    "inference_prepared_requests": true,
+    "harness_events": true,
+    "writer_health": true,
+    "standalone_pre_root_restore_events": false
+  },
+  "identity": {
+    "observatory": "0.3.0",
+    "core": {
+      "version": "0.166.0-alpha.6",
+      "upstream_tag": "rust-v0.166.0-alpha.6",
+      "upstream_commit": "4f093f2748667f3b0e6a07e3d4055121cbd3ce64",
+      "target": "x86_64-unknown-linux-gnu",
+      "v8": {
+        "crate_version": "152.2.0",
+        "rusty_v8_commit": "350c5a859a9b3c84ab8701b3ad51e3b7699b30c0",
+        "engine_version": "15.2.124.1",
+        "engine_commit": "c4ca1eccb90c5464d826b7713dc27178a53b0cfe",
+        "profile": "sandbox_release",
+        "bazel_platform": "@llvm//platforms:linux_amd64",
+        "bazel_version": "9.2.0",
+        "bazel_sha256": "7668a95db1250f12c40407251e4e203b4ec8bf39bc495d2f485b2d8c99048694",
+        "archive_sha256": "b3b490f2aa809eda7f6ac727f851fb00ce8355be72827577cfaac28c7137dbcd",
+        "published_binding_sha256": "3e4d5fecdbe0f98a6017e69d7ca82519a77fb032c5eb5e4cdbecdd3e2ec519d5",
+        "binding_sha256": "de9a71ee1cb4b5ab12ab5bfe382eab023087693bcf874faa72bff6fef0c2d4d5"
+      },
+      "observatory_patch_sha256": "48e16868274825ccc550118da8544e60bf845d30e9b8781f7cb3c85de38eb82f"
+    },
+    "desktop_version": "26.1029.61003"
+  },
+  "api": {
+    "experimental_schema": true,
+    "experimental_gate": "initialize.capabilities.experimentalApi; some methods also require source-specific feature/configuration gates",
+    "raw_event_gate": "thread.experimentalRawEvents plus subscription/inheritance and per-connection notification filters",
+    "schema_sha256": "c4c355204dc0cd33235a8cc0e7fc36cf745ca5c5923f0197d3156f848be8ac23",
+    "stable_schema_sha256": "9e3685e25a86226903ecdbadeeca1985d8dd547a80fbb8df280675e000796b63",
+    "groups": {
+      "ClientRequest": {
+        "count": 179,
+        "methods": [
+          "account/bedrock/checkGovCloudRequirements",
+          "account/bedrock/discover",
+          "account/bedrock/setup",
+          "account/gatewayOAuth/cancel",
+          "account/gatewayOAuth/login",
+          "account/gatewayOAuth/read",
+          "account/gcp/setup",
+          "account/login/cancel",
+          "account/login/start",
+          "account/logout",
+          "account/rateLimitResetCredit/consume",
+          "account/rateLimits/read",
+          "account/read",
+          "account/sendAddCreditsNudgeEmail",
+          "account/usage/read",
+          "account/workspaceMessages/read",
+          "accountSession/list",
+          "accountSession/switch",
+          "app/installed",
+          "app/list",
+          "app/read",
+          "collaborationMode/list",
+          "command/exec",
+          "command/exec/resize",
+          "command/exec/terminate",
+          "command/exec/write",
+          "config/batchWrite",
+          "config/mcpServer/reload",
+          "config/read",
+          "config/value/write",
+          "configRequirements/read",
+          "environment/add",
+          "environment/info",
+          "environment/status",
+          "experimentalFeature/enablement/set",
+          "experimentalFeature/list",
+          "externalAgentConfig/detect",
+          "externalAgentConfig/import",
+          "externalAgentConfig/import/readHistories",
+          "externalAgentConfig/import/recordHistory",
+          "feedback/save",
+          "feedback/upload",
+          "fs/copy",
+          "fs/createDirectory",
+          "fs/getMetadata",
+          "fs/readDirectory",
+          "fs/readFile",
+          "fs/remove",
+          "fs/unwatch",
+          "fs/watch",
+          "fs/writeFile",
+          "fuzzyFileSearch",
+          "fuzzyFileSearch/sessionStart",
+          "fuzzyFileSearch/sessionStop",
+          "fuzzyFileSearch/sessionUpdate",
+          "hooks/list",
+          "initialize",
+          "marketplace/add",
+          "marketplace/remove",
+          "marketplace/upgrade",
+          "mcpServer/event/stream/start",
+          "mcpServer/event/stream/stop",
+          "mcpServer/oauth/login",
+          "mcpServer/resource/read",
+          "mcpServer/tool/call",
+          "mcpServerStatus/list",
+          "memory/reset",
+          "memory/status",
+          "mock/experimentalMethod",
+          "model/list",
+          "modelProvider/capabilities/read",
+          "permissionProfile/list",
+          "plugin/install",
+          "plugin/installed",
+          "plugin/list",
+          "plugin/read",
+          "plugin/reconcile",
+          "plugin/search",
+          "plugin/share/checkout",
+          "plugin/share/delete",
+          "plugin/share/list",
+          "plugin/share/save",
+          "plugin/share/updateTargets",
+          "plugin/skill/read",
+          "plugin/uninstall",
+          "process/kill",
+          "process/resizePty",
+          "process/spawn",
+          "process/writeStdin",
+          "project/create",
+          "project/delete",
+          "project/import",
+          "project/list",
+          "project/move",
+          "project/read",
+          "project/update",
+          "remoteControl/client/list",
+          "remoteControl/client/revoke",
+          "remoteControl/disable",
+          "remoteControl/enable",
+          "remoteControl/pairing/start",
+          "remoteControl/pairing/status",
+          "remoteControl/status/read",
+          "review/start",
+          "rollout/compress",
+          "server/diagnostics",
+          "skills/config/write",
+          "skills/extraRoots/set",
+          "skills/list",
+          "thread/approveGuardianDeniedAction",
+          "thread/archive",
+          "thread/attachment/add",
+          "thread/attachment/list",
+          "thread/attachment/remove",
+          "thread/attachmentOwner/list",
+          "thread/backgroundTerminals/clean",
+          "thread/backgroundTerminals/list",
+          "thread/backgroundTerminals/terminate",
+          "thread/compact/start",
+          "thread/decrement_elicitation",
+          "thread/delete",
+          "thread/fork",
+          "thread/goal/clear",
+          "thread/goal/get",
+          "thread/goal/set",
+          "thread/increment_elicitation",
+          "thread/inject_items",
+          "thread/items/list",
+          "thread/items/read",
+          "thread/list",
+          "thread/loaded/list",
+          "thread/memory/read",
+          "thread/memoryMode/set",
+          "thread/metadata/update",
+          "thread/name/set",
+          "thread/prediction/request",
+          "thread/queue/add",
+          "thread/queue/delete",
+          "thread/queue/list",
+          "thread/queue/reorder",
+          "thread/queue/start",
+          "thread/queue/update",
+          "thread/read",
+          "thread/readState/update",
+          "thread/realtime/appendAudio",
+          "thread/realtime/appendSpeech",
+          "thread/realtime/appendText",
+          "thread/realtime/listVoices",
+          "thread/realtime/start",
+          "thread/realtime/stop",
+          "thread/resume",
+          "thread/revert",
+          "thread/sample",
+          "thread/sample/cancel",
+          "thread/search",
+          "thread/searchOccurrences",
+          "thread/section/move",
+          "thread/settings/update",
+          "thread/shellCommand",
+          "thread/start",
+          "thread/timeline/list",
+          "thread/turns/list",
+          "thread/unarchive",
+          "thread/unsubscribe",
+          "threadSection/create",
+          "threadSection/delete",
+          "threadSection/list",
+          "threadSection/update",
+          "turn/interrupt",
+          "turn/settings/update",
+          "turn/start",
+          "turn/steer",
+          "userVerification/cancel",
+          "userVerification/delete",
+          "userVerification/enroll",
+          "userVerification/status",
+          "userVerification/verify",
+          "windowsSandbox/readiness",
+          "windowsSandbox/setupStart"
+        ],
+        "experimental_only_methods": [
+          "account/bedrock/checkGovCloudRequirements",
+          "account/bedrock/discover",
+          "account/bedrock/setup",
+          "account/gcp/setup",
+          "accountSession/list",
+          "accountSession/switch",
+          "collaborationMode/list",
+          "environment/add",
+          "environment/info",
+          "environment/status",
+          "fuzzyFileSearch/sessionStart",
+          "fuzzyFileSearch/sessionStop",
+          "fuzzyFileSearch/sessionUpdate",
+          "mcpServer/event/stream/start",
+          "mcpServer/event/stream/stop",
+          "memory/reset",
+          "memory/status",
+          "mock/experimentalMethod",
+          "plugin/search",
+          "process/kill",
+          "process/resizePty",
+          "process/spawn",
+          "process/writeStdin",
+          "project/create",
+          "project/delete",
+          "project/import",
+          "project/list",
+          "project/move",
+          "project/read",
+          "project/update",
+          "remoteControl/client/list",
+          "remoteControl/client/revoke",
+          "remoteControl/disable",
+          "remoteControl/enable",
+          "remoteControl/pairing/start",
+          "remoteControl/pairing/status",
+          "remoteControl/status/read",
+          "rollout/compress",
+          "server/diagnostics",
+          "thread/backgroundTerminals/clean",
+          "thread/backgroundTerminals/list",
+          "thread/backgroundTerminals/terminate",
+          "thread/decrement_elicitation",
+          "thread/increment_elicitation",
+          "thread/items/read",
+          "thread/memory/read",
+          "thread/memoryMode/set",
+          "thread/prediction/request",
+          "thread/queue/add",
+          "thread/queue/delete",
+          "thread/queue/list",
+          "thread/queue/reorder",
+          "thread/queue/start",
+          "thread/queue/update",
+          "thread/readState/update",
+          "thread/realtime/appendAudio",
+          "thread/realtime/appendSpeech",
+          "thread/realtime/appendText",
+          "thread/realtime/listVoices",
+          "thread/realtime/start",
+          "thread/realtime/stop",
+          "thread/sample",
+          "thread/sample/cancel",
+          "thread/search",
+          "thread/searchOccurrences",
+          "thread/settings/update",
+          "thread/timeline/list",
+          "turn/settings/update",
+          "userVerification/cancel",
+          "userVerification/delete",
+          "userVerification/enroll",
+          "userVerification/status",
+          "userVerification/verify"
+        ],
+        "experimental_only_fields_on_shared_definitions": [
+          "CommandExecParams.permissionProfile",
+          "ThreadForkParams.attachToSource",
+          "ThreadForkParams.beforeTurnId",
+          "ThreadForkParams.deferGoalContinuation",
+          "ThreadForkParams.experimentalDisablePredictionMcp",
+          "ThreadForkParams.experimentalPredictionMode",
+          "ThreadForkParams.path",
+          "ThreadForkParams.permissions",
+          "ThreadForkParams.runtimeWorkspaceRoots",
+          "ThreadListParams.ancestorThreadId",
+          "ThreadListParams.attachedToThreadId",
+          "ThreadListParams.parentThreadId",
+          "ThreadListParams.projectId",
+          "ThreadMetadataUpdateParams.daybreakEnabled",
+          "ThreadMetadataUpdateParams.projectId",
+          "ThreadResumeParams.history",
+          "ThreadResumeParams.initialTurnsPage",
+          "ThreadResumeParams.path",
+          "ThreadResumeParams.permissions",
+          "ThreadResumeParams.runtimeWorkspaceRoots",
+          "ThreadStartParams.allowProviderModelFallback",
+          "ThreadStartParams.daybreakEnabled",
+          "ThreadStartParams.dynamicTools",
+          "ThreadStartParams.environments",
+          "ThreadStartParams.experimentalRawEvents",
+          "ThreadStartParams.historyMode",
+          "ThreadStartParams.mockExperimentalField",
+          "ThreadStartParams.multiAgentMode",
+          "ThreadStartParams.permissions",
+          "ThreadStartParams.projectId",
+          "ThreadStartParams.runtimeWorkspaceRoots",
+          "ThreadStartParams.selectedCapabilityRoots",
+          "TurnStartParams.additionalContext",
+          "TurnStartParams.collaborationMode",
+          "TurnStartParams.cyberAccessProgram",
+          "TurnStartParams.environments",
+          "TurnStartParams.multiAgentMode",
+          "TurnStartParams.permissions",
+          "TurnStartParams.responsesapiClientMetadata",
+          "TurnStartParams.responsesapiClientMetadataPatch",
+          "TurnStartParams.runtimeWorkspaceRoots",
+          "TurnSteerParams.additionalContext",
+          "TurnSteerParams.responsesapiClientMetadata",
+          "TurnSteerParams.responsesapiClientMetadataPatch"
+        ],
+        "gate_evidence": "difference between generated experimental and stable schemas"
+      },
+      "ClientNotification": {
+        "count": 1,
+        "methods": [
+          "initialized"
+        ],
+        "experimental_only_methods": [],
+        "experimental_only_fields_on_shared_definitions": [],
+        "gate_evidence": "difference between generated experimental and stable schemas"
+      },
+      "ServerRequest": {
+        "count": 11,
+        "methods": [
+          "account/chatgptAuthTokens/refresh",
+          "applyPatchApproval",
+          "attestation/generate",
+          "currentTime/read",
+          "execCommandApproval",
+          "item/commandExecution/requestApproval",
+          "item/fileChange/requestApproval",
+          "item/permissions/requestApproval",
+          "item/tool/call",
+          "item/tool/requestUserInput",
+          "mcpServer/elicitation/request"
+        ],
+        "experimental_only_methods": [
+          "currentTime/read"
+        ],
+        "experimental_only_fields_on_shared_definitions": [
+          "CommandExecutionRequestApprovalParams.additionalPermissions",
+          "CommandExecutionRequestApprovalParams.availableDecisions"
+        ],
+        "gate_evidence": "difference between generated experimental and stable schemas"
+      },
+      "ServerNotification": {
+        "count": 85,
+        "methods": [
+          "account/gatewayOAuth/changed",
+          "account/login/completed",
+          "account/rateLimits/updated",
+          "account/updated",
+          "app/list/updated",
+          "autoApprovalReview/strictReviewRequired",
+          "command/exec/outputDelta",
+          "configWarning",
+          "deprecationNotice",
+          "error",
+          "externalAgentConfig/import/completed",
+          "externalAgentConfig/import/progress",
+          "fs/changed",
+          "fuzzyFileSearch/sessionCompleted",
+          "fuzzyFileSearch/sessionUpdated",
+          "guardianWarning",
+          "hook/completed",
+          "hook/started",
+          "item/agentMessage/delta",
+          "item/autoApprovalReview/completed",
+          "item/autoApprovalReview/started",
+          "item/commandExecution/outputDelta",
+          "item/commandExecution/terminalInteraction",
+          "item/completed",
+          "item/fileChange/outputDelta",
+          "item/fileChange/patchUpdated",
+          "item/mcpToolCall/progress",
+          "item/plan/delta",
+          "item/reasoning/summaryPartAdded",
+          "item/reasoning/summaryTextDelta",
+          "item/reasoning/textDelta",
+          "item/started",
+          "mcpServer/event/stream/notification",
+          "mcpServer/oauthLogin/completed",
+          "mcpServer/startupStatus/updated",
+          "model/rerouted",
+          "model/safetyBuffering/updated",
+          "model/verification",
+          "modelProvider/authRecoveryCompleted",
+          "modelProvider/authRecoveryStarted",
+          "process/exited",
+          "process/outputDelta",
+          "project/changed",
+          "remoteControl/status/changed",
+          "serverRequest/resolved",
+          "skills/changed",
+          "thread/archived",
+          "thread/attachment/updated",
+          "thread/closed",
+          "thread/compacted",
+          "thread/deleted",
+          "thread/environment/connected",
+          "thread/environment/disconnected",
+          "thread/goal/cleared",
+          "thread/goal/updated",
+          "thread/name/updated",
+          "thread/prediction/updated",
+          "thread/project/updated",
+          "thread/queue/changed",
+          "thread/readState/changed",
+          "thread/realtime/closed",
+          "thread/realtime/error",
+          "thread/realtime/item/completed",
+          "thread/realtime/item/started",
+          "thread/realtime/item/transcript/delta",
+          "thread/realtime/itemAdded",
+          "thread/realtime/outputAudio/delta",
+          "thread/realtime/sdp",
+          "thread/realtime/started",
+          "thread/realtime/transcript/delta",
+          "thread/realtime/transcript/done",
+          "thread/reverted",
+          "thread/settings/updated",
+          "thread/started",
+          "thread/status/changed",
+          "thread/tokenUsage/updated",
+          "thread/unarchived",
+          "turn/completed",
+          "turn/diff/updated",
+          "turn/moderationMetadata",
+          "turn/plan/updated",
+          "turn/started",
+          "warning",
+          "windows/worldWritableWarning",
+          "windowsSandbox/setupCompleted"
+        ],
+        "experimental_only_methods": [],
+        "experimental_only_fields_on_shared_definitions": [
+          "Thread.canAcceptDirectInput",
+          "Thread.daybreakEnabled",
+          "Thread.environments",
+          "Thread.extra",
+          "ThreadSettings.multiAgentMode"
+        ],
+        "gate_evidence": "difference between generated experimental and stable schemas"
+      }
+    },
+    "source_declared_not_exported": [
+      {
+        "method": "getAuthStatus",
+        "availability": "internal_or_schema_excluded",
+        "observation": "requires_runtime_evidence",
+        "gate": "consult exact-version source declaration"
+      },
+      {
+        "method": "getConversationSummary",
+        "availability": "internal_or_schema_excluded",
+        "observation": "requires_runtime_evidence",
+        "gate": "consult exact-version source declaration"
+      },
+      {
+        "method": "gitDiffToRemote",
+        "availability": "internal_or_schema_excluded",
+        "observation": "requires_runtime_evidence",
+        "gate": "consult exact-version source declaration"
+      },
+      {
+        "method": "rawResponse/completed",
+        "availability": "internal_or_schema_excluded",
+        "observation": "requires_runtime_evidence",
+        "gate": "thread raw-event setting, subscription, and connection filtering"
+      },
+      {
+        "method": "rawResponseItem/completed",
+        "availability": "internal_or_schema_excluded",
+        "observation": "requires_runtime_evidence",
+        "gate": "thread raw-event setting, subscription, and connection filtering"
+      }
+    ]
+  },
+  "native_trace_events": [
+    {
+      "rust_variant": "AgentResultObserved",
+      "wire_type": "agent_result_observed"
+    },
+    {
+      "rust_variant": "CodeCellEnded",
+      "wire_type": "code_cell_ended"
+    },
+    {
+      "rust_variant": "CodeCellInitialResponse",
+      "wire_type": "code_cell_initial_response"
+    },
+    {
+      "rust_variant": "CodeCellStarted",
+      "wire_type": "code_cell_started"
+    },
+    {
+      "rust_variant": "CodexTurnEnded",
+      "wire_type": "codex_turn_ended"
+    },
+    {
+      "rust_variant": "CodexTurnStarted",
+      "wire_type": "codex_turn_started"
+    },
+    {
+      "rust_variant": "CompactionInstalled",
+      "wire_type": "compaction_installed"
+    },
+    {
+      "rust_variant": "CompactionRequestCompleted",
+      "wire_type": "compaction_request_completed"
+    },
+    {
+      "rust_variant": "CompactionRequestFailed",
+      "wire_type": "compaction_request_failed"
+    },
+    {
+      "rust_variant": "CompactionRequestStarted",
+      "wire_type": "compaction_request_started"
+    },
+    {
+      "rust_variant": "HistoryItemAccepted",
+      "wire_type": "history_item_accepted"
+    },
+    {
+      "rust_variant": "InferenceCancelled",
+      "wire_type": "inference_cancelled"
+    },
+    {
+      "rust_variant": "InferenceCompleted",
+      "wire_type": "inference_completed"
+    },
+    {
+      "rust_variant": "InferenceFailed",
+      "wire_type": "inference_failed"
+    },
+    {
+      "rust_variant": "InferenceStarted",
+      "wire_type": "inference_started"
+    },
+    {
+      "rust_variant": "McpToolCallCorrelationAssigned",
+      "wire_type": "mcp_tool_call_correlation_assigned"
+    },
+    {
+      "rust_variant": "Other",
+      "wire_type": "other"
+    },
+    {
+      "rust_variant": "ProtocolEventObserved",
+      "wire_type": "protocol_event_observed"
+    },
+    {
+      "rust_variant": "RolloutEnded",
+      "wire_type": "rollout_ended"
+    },
+    {
+      "rust_variant": "RolloutStarted",
+      "wire_type": "rollout_started"
+    },
+    {
+      "rust_variant": "StdinTargetResolved",
+      "wire_type": "stdin_target_resolved"
+    },
+    {
+      "rust_variant": "ThreadEnded",
+      "wire_type": "thread_ended"
+    },
+    {
+      "rust_variant": "ThreadResumed",
+      "wire_type": "thread_resumed"
+    },
+    {
+      "rust_variant": "ThreadStarted",
+      "wire_type": "thread_started"
+    },
+    {
+      "rust_variant": "ToolCallEnded",
+      "wire_type": "tool_call_ended"
+    },
+    {
+      "rust_variant": "ToolCallRuntimeEnded",
+      "wire_type": "tool_call_runtime_ended"
+    },
+    {
+      "rust_variant": "ToolCallRuntimeStarted",
+      "wire_type": "tool_call_runtime_started"
+    },
+    {
+      "rust_variant": "ToolCallStarted",
+      "wire_type": "tool_call_started"
+    }
+  ],
+  "observatory_raw_extensions": [
+    {
+      "rust_variant": "AppServerFrameObserved",
+      "wire_type": "app_server_frame_observed"
+    },
+    {
+      "rust_variant": "CompactionRequestCancelled",
+      "wire_type": "compaction_request_cancelled"
+    },
+    {
+      "rust_variant": "HarnessEventObserved",
+      "wire_type": "harness_event_observed"
+    },
+    {
+      "rust_variant": "McpFrameObserved",
+      "wire_type": "mcp_frame_observed"
+    },
+    {
+      "rust_variant": "OversizedEvent",
+      "wire_type": "oversized_event"
+    },
+    {
+      "rust_variant": "RunEnded",
+      "wire_type": "run_ended"
+    },
+    {
+      "rust_variant": "RunStarted",
+      "wire_type": "run_started"
+    },
+    {
+      "rust_variant": "WireTransportObserved",
+      "wire_type": "wire_transport_observed"
+    }
+  ],
+  "harness_literal_event_sites": {
+    "scope": "literal constructor names in instrumented production source; dynamic names and test exercise are not inferred",
+    "events": {
+      "agent_eviction": [
+        "codex-rs/core/src/agent/control/residency.rs"
+      ],
+      "agent_identity": [
+        "codex-rs/core/src/agent/control/spawn.rs"
+      ],
+      "agent_message": [
+        "codex-rs/core/src/agent/control.rs",
+        "codex-rs/core/src/session/input_queue.rs",
+        "codex-rs/core/src/session/mod.rs"
+      ],
+      "agent_reload": [
+        "codex-rs/core/src/agent/control/spawn.rs"
+      ],
+      "agent_residency": [
+        "codex-rs/core/src/agent/control/spawn.rs"
+      ],
+      "agent_result_delivery": [
+        "codex-rs/core/src/agent/control.rs",
+        "codex-rs/core/src/agent/control/completion.rs"
+      ],
+      "agent_slot_reservation": [
+        "codex-rs/core/src/agent/control/spawn.rs"
+      ],
+      "agent_spawn": [
+        "codex-rs/core/src/thread_spawn.rs"
+      ],
+      "agent_spawn_admission": [
+        "codex-rs/core/src/thread_spawn.rs"
+      ],
+      "agent_step": [
+        "codex-rs/core/src/session/turn.rs"
+      ],
+      "agent_step_next_action": [
+        "codex-rs/core/src/session/turn.rs",
+        "codex-rs/rollout-trace/src/harness.rs"
+      ],
+      "agent_target_resolution": [
+        "codex-rs/core/src/agent/agent_resolver.rs"
+      ],
+      "compaction_application": [
+        "codex-rs/core/src/session/turn.rs"
+      ],
+      "compaction_candidate": [
+        "codex-rs/rollout-trace/src/compaction.rs"
+      ],
+      "compaction_decision": [
+        "codex-rs/core/src/session/turn.rs"
+      ],
+      "context_contribution": [
+        "codex-rs/core/src/session/mod.rs"
+      ],
+      "guardian_contributor_approval": [
+        "codex-rs/core/src/guardian/review_request.rs"
+      ],
+      "guardian_fast_decision": [
+        "codex-rs/core/src/guardian/decision.rs"
+      ],
+      "guardian_review": [
+        "codex-rs/rollout-trace/src/protocol_event.rs"
+      ],
+      "hook_effect": [
+        "codex-rs/core/src/hook_runtime.rs",
+        "codex-rs/core/src/session/turn.rs"
+      ],
+      "hook_invocation": [
+        "codex-rs/core/src/hook_runtime.rs"
+      ],
+      "hook_selection": [
+        "codex-rs/core/src/hook_runtime.rs"
+      ],
+      "large": [
+        "codex-rs/rollout-trace/src/writer.rs"
+      ],
+      "mailbox_delivery_policy": [
+        "codex-rs/core/src/session/input_queue.rs"
+      ],
+      "mcp_elicitation_review": [
+        "codex-rs/core/src/session/mcp.rs"
+      ],
+      "prepared_request_context": [
+        "codex-rs/rollout-trace/src/inference.rs"
+      ],
+      "prompt_assembly": [
+        "codex-rs/core/src/session/turn.rs"
+      ],
+      "response_usage": [
+        "codex-rs/core/src/session/turn.rs"
+      ],
+      "sampling_request": [
+        "codex-rs/core/src/session/turn.rs"
+      ],
+      "serving_guardian_assessment": [
+        "codex-rs/rollout-trace/src/inference.rs"
+      ],
+      "step_context_capture": [
+        "codex-rs/core/src/session/mod.rs"
+      ],
+      "stop_supervision": [
+        "codex-rs/core/src/session/turn.rs"
+      ],
+      "tool_catalog": [
+        "codex-rs/rollout-trace/src/inference.rs"
+      ],
+      "turn_input_disposition": [
+        "codex-rs/core/src/session/turn_input.rs"
+      ],
+      "websocket_warmup": [
+        "codex-rs/rollout-trace/src/thread.rs"
+      ]
+    }
+  },
+  "collection_layers": [
+    {
+      "id": "native",
+      "available": true,
+      "boundary": "Core-owned request, output, history, tool, terminal, code-cell, compaction, and child observations",
+      "limit": "not every provider stream event or every Core transition"
+    },
+    {
+      "id": "app_server",
+      "available": true,
+      "boundary": "stdio/WebSocket parsed incoming JSON and connection-filtered prepared outgoing JSON; in-process/remote-control typed messages; transport status",
+      "limit": "prepared output does not prove client delivery; typed boundaries cannot recover already-discarded unknown JSON members"
+    },
+    {
+      "id": "mcp",
+      "available": true,
+      "boundary": "typed transport send/receive and Core backend result before truncation",
+      "limit": "wrapper send does not prove remote receipt; typed MCP boundaries cannot recover already-discarded unknown JSON members"
+    },
+    {
+      "id": "harness",
+      "available": true,
+      "boundary": "source-local categorical observations at native owners",
+      "limit": "acceptance, input drain, model admission, and consumption are distinct"
+    }
+  ],
+  "evidence": {
+    "capture": null,
+    "exercises": [],
+    "status": "declared_not_exercised"
+  },
+  "limits": [
+    "Writer sequence is append order, not a universal causal clock.",
+    "Observed API messages depend on negotiated capabilities and subscriptions.",
+    "A clean sequence is not proof of complete collection.",
+    "Capture hashes are integrity fingerprints, not proof of authenticity.",
+    "Provider-exposed reasoning is not access to hosted private reasoning."
+  ]
+}
