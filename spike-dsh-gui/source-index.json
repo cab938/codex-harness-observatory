@@ -1,0 +1,1187 @@
+{
+  "assessment_date": "2026-11-16",
+  "roots": {
+    "observatory": "/home/brooksch/sandboxes/brooksch/projects/teaching/codex-harness-observatory",
+    "codex": "/home/brooksch/sandboxes/brooksch/projects/teaching/codex-harness-observatory/lib/codex",
+    "dsh_context": "/home/brooksch/sandboxes/brooksch/projects/research/dsh-reviewed/candidates/0.8/dsh-context",
+    "dsh_trajectory": "/home/brooksch/sandboxes/brooksch/projects/research/dsh-reviewed/candidates/0.8/deepseek-harness"
+  },
+  "entries": [
+    {
+      "key": "O.release",
+      "root": "observatory",
+      "files": [
+        {
+          "path": "release.json",
+          "line": 1,
+          "sha256": "231af21e6376d85828405cc24919ca33bc8a36db79ea304f492ddb937bd1e465",
+          "line_count": 67
+        }
+      ],
+      "note": "Matched release and capability pins."
+    },
+    {
+      "key": "O.view",
+      "root": "observatory",
+      "files": [
+        {
+          "path": "src/observatory/trace_viewer.py",
+          "line": 1524,
+          "sha256": "72c37a03d85ca3908191fa8bc8216acb4ecf1151144d7222f5555cd77dec7682",
+          "line_count": 2427
+        },
+        {
+          "path": "src/observatory/web/app.js",
+          "line": 1,
+          "sha256": "c2fb2cdf1fb2d9ac2966efa68eff8279ad2d15a845def87d46b24376a7a3c292",
+          "line_count": 1451
+        },
+        {
+          "path": "src/observatory/web/index.html",
+          "line": 108,
+          "sha256": "4f78368d5b67d6aba8396f01f65c9095cb3c4c46f5bfba9a48f47f9dc64f960e",
+          "line_count": 204
+        }
+      ],
+      "note": "viewer_event, TaskLedger, SSE/artifact routes and existing web UI."
+    },
+    {
+      "key": "O.raw",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/raw_event.rs",
+          "line": 33,
+          "sha256": "8deed4044cd84f10624d7cb6032c29a9a9288039c1939b357d98013b46e4c49e",
+          "line_count": 456
+        }
+      ],
+      "note": "Raw event envelope and payload variants."
+    },
+    {
+      "key": "O.req",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/inference.rs",
+          "line": 231,
+          "sha256": "811cf3d2dbd0627a2f6cff0191635eaa234a384d2d6b47fd651ec767d7d43852",
+          "line_count": 880
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/reducer/inference.rs",
+          "line": 1,
+          "sha256": "ef6616b31fb893c7bca4c5c3267f2eea7cc325f6fab1f8f3df960bd731f69272",
+          "line_count": 237
+        }
+      ],
+      "note": "Prepared body/logical continuity, tool catalog, category counts, output serializer and inference reduction."
+    },
+    {
+      "key": "O.hist",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/thread.rs",
+          "line": 631,
+          "sha256": "5b2e3fb7350a9807da055e860e9b64f41bd72679a74b4a8c445c94b69a4d3b77",
+          "line_count": 946
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/reducer/conversation.rs",
+          "line": 64,
+          "sha256": "027369b4ef4e213722765cbf98858393ba6f8f088d86d45be39f248921387020",
+          "line_count": 813
+        }
+      ],
+      "note": "History admission receipts, snapshot reconciliation and incremental context."
+    },
+    {
+      "key": "O.tools",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/tool_dispatch.rs",
+          "line": 1,
+          "sha256": "33893e59a057a136318d6f499215c35b6510e34db7185fcbd80e848c84626943",
+          "line_count": 417
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/reducer/tool.rs",
+          "line": 1,
+          "sha256": "670134c538653011cfb81d250a5df5c2a6fdab296b816b07417840666181f4fd",
+          "line_count": 521
+        }
+      ],
+      "note": "Canonical invocation/result and runtime tool identities."
+    },
+    {
+      "key": "O.cell",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/code_cell.rs",
+          "line": 1,
+          "sha256": "bae299f77b102aa6569f4c048f582601ae7b252aa13e6b9025e878939c6cc1fa",
+          "line_count": 189
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/reducer/code_cell.rs",
+          "line": 1,
+          "sha256": "d9cafe271df83a4bd9c8468a64389180d314b73e917b6160a40acd60de0eb442",
+          "line_count": 727
+        }
+      ],
+      "note": "Cell lifecycle, nested tools and wait/result links."
+    },
+    {
+      "key": "O.term",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/reducer/tool/terminal.rs",
+          "line": 1,
+          "sha256": "47ace5934b8e0ab24a836f818c899e9a3e85524f325095b8ebc899abf58a7bf6",
+          "line_count": 660
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/model/runtime.rs",
+          "line": 222,
+          "sha256": "56784c4cfb6fd2380da8f07df388d57e889635ba1bf9b07728409ba8ad8642ac",
+          "line_count": 343
+        }
+      ],
+      "note": "Terminal process/operation/result and recyclable process resolution."
+    },
+    {
+      "key": "O.comp",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/compaction.rs",
+          "line": 85,
+          "sha256": "61b6807df1547bb8fff1aa5db8e3b536b4249cca3b3c8711675c8f2cf080b9f6",
+          "line_count": 417
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/reducer/compaction.rs",
+          "line": 1,
+          "sha256": "1238c2372685db3dbd02c23f1f78d9816862dd2b716cc0005d0b092a6e5b7c8d",
+          "line_count": 185
+        }
+      ],
+      "note": "Input/installation/suffix/replacement checkpoint and installation lifecycle."
+    },
+    {
+      "key": "O.protocol",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/protocol_event.rs",
+          "line": 1,
+          "sha256": "51a2025549dea0ba8ab5814240f9f9bb5510b6b6fa6fba31f2cd9c1fb47e7aaa",
+          "line_count": 631
+        }
+      ],
+      "note": "Typed runtime observations and protocol wrappers."
+    },
+    {
+      "key": "O.bundle",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/bundle.rs",
+          "line": 1,
+          "sha256": "a1ed70e62b35737944f78b69a2ba15d5f711b32dcbcdd1ca9abdef8ab3d509c5",
+          "line_count": 162
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/reducer/mod.rs",
+          "line": 53,
+          "sha256": "de10d823be72ac826fb3d4d2e1032d4487af7b8bfce12a85a0efe7d20cda75b4",
+          "line_count": 936
+        },
+        {
+          "path": "codex-rs/cli/src/main.rs",
+          "line": 2114,
+          "sha256": "5e28df1e196d9f5a5520dcaa831c82cef3627a02b424c9ea1457117050506981",
+          "line_count": 5098
+        }
+      ],
+      "note": "Manifest/health/schema and debug trace-reduce -> state.json."
+    },
+    {
+      "key": "O.wire",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/wire.rs",
+          "line": 1,
+          "sha256": "055d93a4be0ef19112eb606732e9a7a4757dbd598103c4e5510a9f435f7d7595",
+          "line_count": 783
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/mcp.rs",
+          "line": 1,
+          "sha256": "1794ff3d4ea49795f44c665fa603f969d1fa8bb6d09a5d6dbdb3da7a42e32032",
+          "line_count": 130
+        }
+      ],
+      "note": "App Server/MCP observation and exchange identity."
+    },
+    {
+      "key": "O.model",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/model/session.rs",
+          "line": 1,
+          "sha256": "5c025eb14a59141175be469f584cf523fee116ef0d38d7f7e52297f7d1add864",
+          "line_count": 115
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/model/conversation.rs",
+          "line": 1,
+          "sha256": "3a63dbffd285eefc3fb97ddb1a017213cbb0afaf8565a8c503cacc0a029e6aa7",
+          "line_count": 214
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/model/runtime.rs",
+          "line": 1,
+          "sha256": "56784c4cfb6fd2380da8f07df388d57e889635ba1bf9b07728409ba8ad8642ac",
+          "line_count": 343
+        }
+      ],
+      "note": "Reduced identities, execution windows, conversation parts and usage."
+    },
+    {
+      "key": "O.agents",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/core/src/agent/control.rs",
+          "line": 1,
+          "sha256": "efa0f5409312ce44a31390042bde16575f372db37b1bb2e7155770e011fcd9eb",
+          "line_count": 839
+        },
+        {
+          "path": "codex-rs/core/src/agent/control/spawn.rs",
+          "line": 1,
+          "sha256": "b455cdb82274e4eba578bda2a26cb6ab0dea17b4c2b1bbb550a2e42969a01c3c",
+          "line_count": 1367
+        },
+        {
+          "path": "codex-rs/core/src/tools/handlers/multi_agents/spawn.rs",
+          "line": 1,
+          "sha256": "586b95cec269449da3bba76d03bb4957c9da40e94dbf752184c0b89d0b51af96",
+          "line_count": 294
+        },
+        {
+          "path": "codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs",
+          "line": 1,
+          "sha256": "50829e12c5a5ecfc12b6f39560aef55a4596e96c0ec378a96c2fcc2afb3692eb",
+          "line_count": 119
+        }
+      ],
+      "note": "Agent identity, spawn and message source observations."
+    },
+    {
+      "key": "O.tests",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/rollout-trace/src/reducer/acceptance_tests.rs",
+          "line": 1,
+          "sha256": "0c2a01e60d01dbe753a3606ac6f082e1730b1970799f24d6c7d522bb2b6378c8",
+          "line_count": 279
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/reducer/inference_tests.rs",
+          "line": 1,
+          "sha256": "abb74d4b0f32bfcff8fee378337ced8adfa205fb831bd94b818bd5330fd74ccf",
+          "line_count": 173
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/reducer/code_cell_tests.rs",
+          "line": 1,
+          "sha256": "ac5ec3675fdb968c8f74da7a6817187ed19d45b361a8c3b0339cd7252600a20a",
+          "line_count": 561
+        },
+        {
+          "path": "codex-rs/rollout-trace/src/reducer/conversation_tests.rs",
+          "line": 1,
+          "sha256": "78423f3125aa132f7d8af557b15bf5440d80ab7352f27cb939ef5dc1e3095ca7",
+          "line_count": 1504
+        },
+        {
+          "path": "codex-rs/core/src/tools/tool_dispatch_trace_tests.rs",
+          "line": 1,
+          "sha256": "8241ddba8000b710ad0a0979353e420c9055e306f8c577d9ef3c87484b5b165f",
+          "line_count": 664
+        }
+      ],
+      "note": "Existing identity, cancellation, continuity, compaction and nested-call regression references; not rerun by this spike."
+    },
+    {
+      "key": "C.client",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/core/src/client.rs",
+          "line": 1161,
+          "sha256": "c72c3d23c458dc2338ecdf816ad784adc35e80ce1685bf26ea2c555577da55f5",
+          "line_count": 3418
+        },
+        {
+          "path": "codex-rs/core/src/client_common.rs",
+          "line": 61,
+          "sha256": "5ab37dfa554f057b510e70f3e37439c7878f74981c644a95c650c7bafa526db7",
+          "line_count": 146
+        }
+      ],
+      "note": "Request preparation/stripping, HTTP/WebSocket recording, map_response_events."
+    },
+    {
+      "key": "C.turn",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/core/src/session/turn.rs",
+          "line": 809,
+          "sha256": "ea45255ee54adaa59cb3cff8a53c7a072404c6fc8a6ae86c4bfe721df7d43b04",
+          "line_count": 4337
+        },
+        {
+          "path": "codex-rs/core/src/session/turn.rs",
+          "line": 2191,
+          "sha256": "ea45255ee54adaa59cb3cff8a53c7a072404c6fc8a6ae86c4bfe721df7d43b04",
+          "line_count": 4337
+        }
+      ],
+      "note": "Compaction decision, record_prompt_assembly and response usage."
+    },
+    {
+      "key": "C.session",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/core/src/session/mod.rs",
+          "line": 4052,
+          "sha256": "e9d9bb118a951b77e0790a8c0d07746fd211ab7d6168cf205ced87bb66644ce7",
+          "line_count": 6402
+        },
+        {
+          "path": "codex-rs/core/src/session/mod.rs",
+          "line": 4329,
+          "sha256": "e9d9bb118a951b77e0790a8c0d07746fd211ab7d6168cf205ced87bb66644ce7",
+          "line_count": 6402
+        },
+        {
+          "path": "codex-rs/core/src/session/mod.rs",
+          "line": 4888,
+          "sha256": "e9d9bb118a951b77e0790a8c0d07746fd211ab7d6168cf205ced87bb66644ce7",
+          "line_count": 6402
+        },
+        {
+          "path": "codex-rs/core/src/session/mod.rs",
+          "line": 5195,
+          "sha256": "e9d9bb118a951b77e0790a8c0d07746fd211ab7d6168cf205ced87bb66644ce7",
+          "line_count": 6402
+        }
+      ],
+      "note": "History admission, step capture, compaction replacement, source counts and usage."
+    },
+    {
+      "key": "C.budget",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/core/src/session/context_window.rs",
+          "line": 1,
+          "sha256": "9692f442771c63308cfc36954810cb2490d84c28b681972ea13b93afbd30050a",
+          "line_count": 130
+        },
+        {
+          "path": "codex-rs/core/src/context_manager/history.rs",
+          "line": 1163,
+          "sha256": "656951e67e2fb26502e414e7d23563ff89ffd81e48878976f54c8032f3e3415a",
+          "line_count": 1672
+        }
+      ],
+      "note": "ContextWindowTokenStatus and harness active-token estimate."
+    },
+    {
+      "key": "C.ann",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/protocol/src/models/item_metadata.rs",
+          "line": 55,
+          "sha256": "636a1911e21e6fa543133b9ef14094b5b973dfd968ee5afcf20b418a827f4ec3",
+          "line_count": 164
+        },
+        {
+          "path": "codex-rs/protocol/src/models.rs",
+          "line": 1024,
+          "sha256": "12efea9b0239e08d1a94afe122446b9fcde384c7a302847c19472dc7ed77b331",
+          "line_count": 4795
+        }
+      ],
+      "note": "Per-part provenance and internal passthrough/skip-serialization."
+    },
+    {
+      "key": "C.fragments",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/context-fragments/src/fragment.rs",
+          "line": 56,
+          "sha256": "3b169580db2a6a38d82256bf8266d374628ba196fe187b52e21cc801535f0f6c",
+          "line_count": 177
+        },
+        {
+          "path": "codex-rs/context-fragments/src/annotated_content.rs",
+          "line": 1,
+          "sha256": "ce0a7463c27c4775f36a54354c9f257eacba4bdbfd29050b0e3f83839ac00461",
+          "line_count": 235
+        },
+        {
+          "path": "codex-rs/core/src/context_manager/updates.rs",
+          "line": 1,
+          "sha256": "3056ba7cd5870aabd1e9e961fb88e4d08cc34f5276bf308a42d844bcf9f346a1",
+          "line_count": 52
+        }
+      ],
+      "note": "Producer annotations survive grouping and truncation."
+    },
+    {
+      "key": "C.skills",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/core/src/skills.rs",
+          "line": 145,
+          "sha256": "3581f3ad3e06b88a2da5d7a1a90ba24b76401610374e521ced7aabfcfc9e987d",
+          "line_count": 340
+        },
+        {
+          "path": "codex-rs/core/src/skills.rs",
+          "line": 240,
+          "sha256": "3581f3ad3e06b88a2da5d7a1a90ba24b76401610374e521ced7aabfcfc9e987d",
+          "line_count": 340
+        }
+      ],
+      "note": "Native explicit and detected implicit skill invocations."
+    },
+    {
+      "key": "C.skills-fragments",
+      "root": "codex",
+      "files": [
+        {
+          "path": "codex-rs/ext/skills/src/fragments.rs",
+          "line": 1,
+          "sha256": "d5e9543668a0d69e972b2577254b7cb1efe07f80898b5319ac4143693bf275b5",
+          "line_count": 128
+        }
+      ],
+      "note": "Catalog versus selected skill instructions, metadata and content kinds."
+    },
+    {
+      "key": "D.view",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/contextView.tsx",
+          "line": 1,
+          "sha256": "edd3f21c1165aebc2a838bcc670cab7e0838c8df79fa587b655d369786d555c5",
+          "line_count": 899
+        }
+      ],
+      "note": "Panel composition, cross-card focus, scope and hover/pin linkage."
+    },
+    {
+      "key": "D.stats",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/statsContext.tsx",
+          "line": 1,
+          "sha256": "67b0c55e4c092cb752e67b90e92f713931556aef4dc6c8f94026e952f40985f2",
+          "line_count": 573
+        }
+      ],
+      "note": "Counts, I/O, tool/command chips, current/family usage and click navigation."
+    },
+    {
+      "key": "D.browser",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/browser.tsx",
+          "line": 1,
+          "sha256": "c19fdf01402d7ed7d383266ebe382856b55fa51b0965700ad860414916ab474b",
+          "line_count": 904
+        }
+      ],
+      "note": "Request/baseline selection, category/item inspection, filtering, sorting and treemap/DNA controls."
+    },
+    {
+      "key": "D.categories",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/categories.ts",
+          "line": 1,
+          "sha256": "cc1f136459789f64648393b1099bd988604f497795ec5ac56726689145250782",
+          "line_count": 145
+        }
+      ],
+      "note": "Category palette, officialParts, anchoredParts and billedParts."
+    },
+    {
+      "key": "D.tokens",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/statsTokens.tsx",
+          "line": 1,
+          "sha256": "b0dfdfd1d4340cccd87f3cf6c6175b7943fdad63e903e80a65f310a5a4167de8",
+          "line_count": 73
+        }
+      ],
+      "note": "Token donut, cumulative totals and cache share."
+    },
+    {
+      "key": "D.format",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/format.ts",
+          "line": 1,
+          "sha256": "11d51ce0197098affcf59ecddc90e2a0b33d17c81b1af8c213e39574359847b0",
+          "line_count": 74
+        }
+      ],
+      "note": "Cache-share and display formatting."
+    },
+    {
+      "key": "D.current",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/currentComposition.tsx",
+          "line": 1,
+          "sha256": "74b5abb15623d4b1528ff37895c021b86b21a32d1bfe2603f34f78502f45341d",
+          "line_count": 61
+        }
+      ],
+      "note": "Current gauge, composition, legend and reserve rendering."
+    },
+    {
+      "key": "D.headline",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/headline.ts",
+          "line": 1,
+          "sha256": "447dd9a1cdf0ffebc3ebbeb59435427bdf44b4340deca44a847a802077a253ea",
+          "line_count": 48
+        }
+      ],
+      "note": "Projected/sampled/derived occupancy precedence and anchored category areas."
+    },
+    {
+      "key": "D.reserve",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/reserve.ts",
+          "line": 1,
+          "sha256": "35d19b405c46fc6550983d37cce51fb237de942733f6dc717ceb5fc4bc23bffc",
+          "line_count": 24
+        }
+      ],
+      "note": "Fixed DSH reserve geometry; not Codex policy."
+    },
+    {
+      "key": "D.timing",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/statsTiming.tsx",
+          "line": 1,
+          "sha256": "2b128c64ff0e1dd3eca66ceeb8275461ca1cc15c32582b89a1fdc4a0cd8af1bd",
+          "line_count": 157
+        }
+      ],
+      "note": "Active-time donut, phase totals, tool busy time and TPS."
+    },
+    {
+      "key": "D.metering",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/host/foldMetering.ts",
+          "line": 1,
+          "sha256": "669540cd5ca36c6cddb219d1ea659c60b56208a510a0a7d6211d61eabc735efd",
+          "line_count": 191
+        }
+      ],
+      "note": "Time accumulation, interval merge/carving, idle threshold."
+    },
+    {
+      "key": "D.strip",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/timingStrip.tsx",
+          "line": 1,
+          "sha256": "624e63acfb50e664088b7c4d80fb419166015589d7d55efd96dc68f2cc8d5861",
+          "line_count": 191
+        }
+      ],
+      "note": "Phase strip and shared hover labels."
+    },
+    {
+      "key": "D.fold",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/host/fold.ts",
+          "line": 1,
+          "sha256": "f53bf6b50fef87c52f8849892f064948d031547b4d6773565e7c9472ee5c47a3",
+          "line_count": 916
+        }
+      ],
+      "note": "DSH event taxonomy, source categories, request/answer counts and compaction/prune events."
+    },
+    {
+      "key": "D.skills",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/host/skills.ts",
+          "line": 1,
+          "sha256": "8e1597bf3664788223b0c746eb237373004d06d3d2780db4a6c0bebeeef49d23",
+          "line_count": 138
+        }
+      ],
+      "note": "Session-scoped catalog lookup for live plugin features."
+    },
+    {
+      "key": "D.trend",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/trendChart.tsx",
+          "line": 1,
+          "sha256": "3a676d06854e30bd90faede151946f29928ddf81d3c268cc7bbb75c66fd0c923",
+          "line_count": 768
+        },
+        {
+          "path": "src/client/components/trendWindow.ts",
+          "line": 1,
+          "sha256": "af98d269425e6218a03794f45b4acabf5d1b6757ea3be72e1f09af32f1552da2",
+          "line_count": 39
+        }
+      ],
+      "note": "Stacked/DNA bars, scrolling, adaptive axes and viewport windowing."
+    },
+    {
+      "key": "D.trendModel",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/trendModel.ts",
+          "line": 1,
+          "sha256": "c6024ce20a2795a055d8a8cfceb879a0ab5adbd47e0096e8bbaff0481d0d5b5f",
+          "line_count": 147
+        }
+      ],
+      "note": "Turn's final snapshot, signed delta/churn, markers and tooltips."
+    },
+    {
+      "key": "D.duration",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/trendDurationCurve.tsx",
+          "line": 1,
+          "sha256": "be4fa7b4d2f2f20bdd45d547f803aa79909a95e15cbfa1b4062c165f40b3299f",
+          "line_count": 27
+        }
+      ],
+      "note": "Duration overlay drawing."
+    },
+    {
+      "key": "D.dna",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/dna.ts",
+          "line": 1,
+          "sha256": "bea167800bbca7af86d0164d82b48ebb88ba2fc4570423c8c8cce3ad4d2fb004",
+          "line_count": 113
+        }
+      ],
+      "note": "Item-level bands, identity and added/removed areas."
+    },
+    {
+      "key": "D.overview",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/trendOverview.tsx",
+          "line": 1,
+          "sha256": "13a1d7ac00e4814072bb9bf6336b670c4a5c6e6eb67f7ebf60ac345f6fb549e0",
+          "line_count": 455
+        }
+      ],
+      "note": "Fit-to-width ribbon and turn/category navigation."
+    },
+    {
+      "key": "D.request",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/requestDetail.tsx",
+          "line": 1,
+          "sha256": "0583a948017b579c79f3baf6ea85fbbf786c4a00bb280469c6210acffbebeb5b",
+          "line_count": 210
+        }
+      ],
+      "note": "Selected request brief and reported/estimated metrics."
+    },
+    {
+      "key": "D.events",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/events.tsx",
+          "line": 1,
+          "sha256": "dbb85bc11bf64a4820c569051a0cee95deee883a29264c95c3b64f40b379e425",
+          "line_count": 133
+        }
+      ],
+      "note": "Context-event labels, source location, size and reveal links."
+    },
+    {
+      "key": "D.files",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/fileCard.tsx",
+          "line": 1,
+          "sha256": "d3279ece0ccf9c59e8076d99bebe5baff8e36d04719f5da53b1107675a2d99fb",
+          "line_count": 340
+        }
+      ],
+      "note": "Path table, filters, sorts and operation expansion."
+    },
+    {
+      "key": "D.activity",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/fileActivity.ts",
+          "line": 1,
+          "sha256": "e3ff6a47b3b7084b8c35f9eea4c41cb480ac9d7e785745f2bb48f0d7414a8bd8",
+          "line_count": 426
+        }
+      ],
+      "note": "File aggregation, path display and operation/source linking."
+    },
+    {
+      "key": "D.fileOps",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/shared/fileOps.ts",
+          "line": 1,
+          "sha256": "be8e7ede1e4e16901aeaebd0674e02867c28d5f099c858021b12c10b93427641",
+          "line_count": 198
+        }
+      ],
+      "note": "Recognized call arguments and inferred read/write/search/range metadata."
+    },
+    {
+      "key": "D.commands",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/commands.ts",
+          "line": 1,
+          "sha256": "efc0101acba40186f463d4df280b87dda0b243e929f25be995e43c1335b1e6ea",
+          "line_count": 186
+        },
+        {
+          "path": "src/shared/commands.ts",
+          "line": 1,
+          "sha256": "42fbb481973d3bab02cc587c63a926af1bfcb68ab48f0bd59f2070af8d7306d3",
+          "line_count": 770
+        }
+      ],
+      "note": "Command tools, outcome parsing, units, grouping and slow threshold."
+    },
+    {
+      "key": "D.commandPanel",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/commandPanel.tsx",
+          "line": 1,
+          "sha256": "9343357623589d5c533768d9b535cff843638c2b01fdede5bb5abc443e04a3b1",
+          "line_count": 596
+        }
+      ],
+      "note": "Command rows/results, summary, filters, pagination and locate behavior."
+    },
+    {
+      "key": "D.attachments",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/attachments.tsx",
+          "line": 1,
+          "sha256": "4b842d1fb12c346272e6de27a0c10a2bed37cd463f37e6aa79f7810744e0150f",
+          "line_count": 210
+        }
+      ],
+      "note": "Recorded image/file references, thumbnail loading and metadata."
+    },
+    {
+      "key": "D.nodes",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/browserNodes.tsx",
+          "line": 1,
+          "sha256": "6080d4ef8d96b9a2ed378c4887987ec900c0f6ca698a477d3bc079a388a25653",
+          "line_count": 110
+        },
+        {
+          "path": "src/client/components/nodes.tsx",
+          "line": 1,
+          "sha256": "0acc822c6395443bddb9d7255981e78b748691a5e9173a5f571cea8035a2952b",
+          "line_count": 18
+        }
+      ],
+      "note": "Mixed message parts and kind filters."
+    },
+    {
+      "key": "D.schema",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/browserToolCard.tsx",
+          "line": 1,
+          "sha256": "7b19b4a46247eb6cfaf5ef9335c50e32f41b44f87a11d25c17e3e1f617d40763",
+          "line_count": 297
+        },
+        {
+          "path": "src/client/components/browserSchema.ts",
+          "line": 1,
+          "sha256": "1f87224121fd4c9e5701cdb080a1f32b1c6fa23e268e6b8a77d6ac15b4860bd5",
+          "line_count": 63
+        },
+        {
+          "path": "src/host/headers.ts",
+          "line": 1,
+          "sha256": "97a59aa04a8b9beccc17aec5111ebef53f171264f85cc88e3f56e0b60d36a61b",
+          "line_count": 126
+        },
+        {
+          "path": "src/host/attribution.ts",
+          "line": 1,
+          "sha256": "106c56c1749ea0b6c3f8d6f35898489c71e4a894b00dc8871ce6844c6e2a6dcc",
+          "line_count": 165
+        }
+      ],
+      "note": "Schema rendering, historical headers and inferred plugin ownership."
+    },
+    {
+      "key": "D.content",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/richText.tsx",
+          "line": 1,
+          "sha256": "7c4851b69d2367c66452f1db9d8126a952a07c0f964416d14fa2dca6e1b5586d",
+          "line_count": 347
+        }
+      ],
+      "note": "Rich/raw content handling."
+    },
+    {
+      "key": "D.treemap",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/browserTreemap.tsx",
+          "line": 1,
+          "sha256": "42de1fbfaec47652e04335b09ca7b6b4e8893a0171c84a0a3270740c4a4e7480",
+          "line_count": 255
+        },
+        {
+          "path": "src/client/treemap.ts",
+          "line": 1,
+          "sha256": "9aa7c533e18f71bef409851d3b3bc387c0a7952658fd0740f54620e079762476",
+          "line_count": 163
+        }
+      ],
+      "note": "Category/item area maps."
+    },
+    {
+      "key": "D.assemble",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/assemble.ts",
+          "line": 1,
+          "sha256": "ade4820b74c5bbe1fc7766cf03a944f976e40b1b8b07b46c335fa46877de93bc",
+          "line_count": 69
+        }
+      ],
+      "note": "Historical surface/header reconstruction and missing/approximate flags."
+    },
+    {
+      "key": "D.plugin",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/components/pluginInfo.tsx",
+          "line": 1,
+          "sha256": "df02b4aec02cf49e9eb2834c8f6f75843cef27d5a2135c251e0bc75e2c533093",
+          "line_count": 52
+        },
+        {
+          "path": "src/client/components/recomCard.tsx",
+          "line": 1,
+          "sha256": "5895a5f7c3dc5bc27dff2d94be6ef775ac8df80b3c41a19b739e03b1f8384916",
+          "line_count": 124
+        }
+      ],
+      "note": "Host metadata and recommendation/promotional panels."
+    },
+    {
+      "key": "D.cost",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/client/cost.ts",
+          "line": 1,
+          "sha256": "202c069003d1ab190e4ff470f9833e78ad910ece513c90bd33947fe0960965ca",
+          "line_count": 462
+        }
+      ],
+      "note": "Price lookup, cost estimation and billed-token totals."
+    },
+    {
+      "key": "D.types",
+      "root": "dsh_context",
+      "files": [
+        {
+          "path": "src/shared/types.ts",
+          "line": 1,
+          "sha256": "6e58a5c049134e3ac9ca6ebaa4d615ac5395a2cdb4bc798aea551f6ef4dec97c",
+          "line_count": 466
+        },
+        {
+          "path": "src/shared/estimate.ts",
+          "line": 1,
+          "sha256": "9e1186371fe68107c21160d2a241fcf306b4a0647a9384121898097d7b4b3c4d",
+          "line_count": 32
+        },
+        {
+          "path": "src/host/pricing.ts",
+          "line": 1,
+          "sha256": "c27b1d3f7acf336b7c359c9b842d8703ee70699dc9775b5206367138b0b535ca",
+          "line_count": 158
+        }
+      ],
+      "note": "Shared data contracts and text/schema estimation."
+    },
+    {
+      "key": "T.view",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/TrajectoryView.tsx",
+          "line": 1,
+          "sha256": "28c5101420fb52243c779f6e4db6194af337d89deeb914006ce7038322b8ff5d",
+          "line_count": 617
+        }
+      ],
+      "note": "Projection consumer, request numbering, partial/live rows, history and selection."
+    },
+    {
+      "key": "T.table",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
+          "line": 1,
+          "sha256": "7a35f595a2ea61b6d7186f9d2b5039162940e9a9037d59cb56f763b52a96aa7f",
+          "line_count": 3607
+        }
+      ],
+      "note": "Detail tabs, hierarchy, rich/raw/JSON/code output, resizable pane and virtual ledger."
+    },
+    {
+      "key": "T.toolbar",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/TrajectoryToolbar.tsx",
+          "line": 1,
+          "sha256": "d8fd727b78d72a84eb443b1bba592b0e6ae62d26bfeef6ca7dd0cee62a04e45d",
+          "line_count": 147
+        }
+      ],
+      "note": "Duration toggle, fold controls, search and hidden actual-time control."
+    },
+    {
+      "key": "T.timeline",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/timeline.ts",
+          "line": 1,
+          "sha256": "ed2ebfd8b4233022115d9757d50d3af6cf399690ccc4fcf36f9f3edcf8e7b173",
+          "line_count": 205
+        }
+      ],
+      "note": "Sequence/duration/complete/compressed time projections and three lane mapping."
+    },
+    {
+      "key": "T.overview",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
+          "line": 1,
+          "sha256": "c062d06535a38498051346095bb713a292f45085e7de817a9400a92292c4eedc",
+          "line_count": 739
+        }
+      ],
+      "note": "Overview click/brush, wheel zoom, pan, focus and tooltip interactions."
+    },
+    {
+      "key": "T.record",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/trajectory-record.ts",
+          "line": 1,
+          "sha256": "99be6143d7c18725a3d699c343beaeba7b4e06d7d8b468a2ebf91ceeddbeb1af",
+          "line_count": 149
+        }
+      ],
+      "note": "Record/source-block contracts, stable record IDs and metrics."
+    },
+    {
+      "key": "T.contract",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/trajectory-contract.ts",
+          "line": 1,
+          "sha256": "fb80cadc0f359e74903d8d3d27012140944c695b353a573db5b06e911dda82ff",
+          "line_count": 105
+        }
+      ],
+      "note": "Request headers, partial assistant, tool schemas and image renderer slot."
+    },
+    {
+      "key": "T.layout",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/layout.ts",
+          "line": 1,
+          "sha256": "59712c5a03f40498d84beb60a8f272a4d087c8094539809c146ad2491e8d9c3e",
+          "line_count": 1149
+        }
+      ],
+      "note": "Turn/step groups, assistant/tool/subcall nesting."
+    },
+    {
+      "key": "T.tool",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/trajectory-tool-definition.ts",
+          "line": 1,
+          "sha256": "d33cac586ff99db19d5783ab05ebebeaa4289b7fe2db547bbb60300d46508a8c",
+          "line_count": 285
+        }
+      ],
+      "note": "Call/result/dispatch lifecycle, nested/error/interruption handling."
+    },
+    {
+      "key": "T.assistant",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts",
+          "line": 1,
+          "sha256": "aaf935e0a998376c9b139d379711e51564140bad26eb7d1d243ad0131c251556",
+          "line_count": 472
+        }
+      ],
+      "note": "Request and assistant lifecycle, partial output, retries and failed requests."
+    },
+    {
+      "key": "T.header",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/trajectory-request-header-definition.ts",
+          "line": 1,
+          "sha256": "9b8032aa9d407411026937db2dab709f76b312a3ce33dc553fec663041bca220",
+          "line_count": 151
+        }
+      ],
+      "note": "Prompt/catalog introductions and updates."
+    },
+    {
+      "key": "T.comp",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/trajectory-compaction-definition.ts",
+          "line": 1,
+          "sha256": "587a4ac3db4f56ddf4cac2f3a752ac03733dd9c1626d7814d4db4cb766403fe6",
+          "line_count": 143
+        }
+      ],
+      "note": "Compaction request/result/checkpoint projection."
+    },
+    {
+      "key": "T.code",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/code-program.ts",
+          "line": 1,
+          "sha256": "312bb5cb761266a1c0dbda3774db40b2855ab1dbd1a4a273e75572e14aca85a1",
+          "line_count": 69
+        }
+      ],
+      "note": "JavaScript program source/summary and tool presentation."
+    },
+    {
+      "key": "T.search",
+      "root": "dsh_trajectory",
+      "files": [
+        {
+          "path": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
+          "line": 1,
+          "sha256": "081fdf9092da9fe24e23b255262f3bd0f0e020aa9f377e318722f956b6cd371a",
+          "line_count": 133
+        }
+      ],
+      "note": "Searchable raw/rich content, source metadata and schemas."
+    }
+  ]
+}
