@@ -1,5 +1,7 @@
 # DSH-style Context and Trajectory for the Observatory
 
+Status: closed on 2026-11-18. The agreed first implementation is integrated into main and maintained in the regular source tree. See the [closeout record](DEVELOPMENT.md#closeout-2026-11-18) for source identity and remaining validation limits.
+
 Assessment date: 2026-11-16. The original source-grounded spike and baseline evidence are preserved here. The user subsequently authorized implementation; current delivered behavior, metric choices, acceptance results and remaining limits are recorded in [DEVELOPMENT.md](DEVELOPMENT.md#implementation-record-2026-11-16). The full feature inventory remains the wider target.
 
 ## Purpose and scope
