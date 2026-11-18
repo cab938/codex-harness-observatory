@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "observatory": {
-    "version": "0.4.0",
-    "release_tag": "v0.4.0",
-    "base_url": "https://github.com/cab938/codex-harness-observatory/releases/download/v0.4.0"
+    "version": "0.5.0.dev0",
+    "release_tag": "v0.5.0-dev0",
+    "base_url": "https://github.com/cab938/codex-harness-observatory/releases/download/v0.5.0-dev0"
   },
   "core": {
     "version": "0.169.0",
@@ -23,8 +23,8 @@
       "published_binding_sha256": "3e4d5fecdbe0f98a6017e69d7ca82519a77fb032c5eb5e4cdbecdd3e2ec519d5",
       "binding_sha256": "dc81049e515ab0a7568779c7f0cbc1db330c2927c67e0f6d0a25a0dab203ccb5"
     },
-    "observatory_patch_sha256": "c8b57ff87eaa117d9f839819995483f343dd26327f6018434fba82275188d346",
-    "instrumented_commit": "008448a4e778564b7505d5e35095efaf1f8a6896"
+    "observatory_patch_sha256": "478abe629c3f51ceabe6d6f8ab2b8b8f03aeff850cd3781b27de9a8d8e50c138",
+    "instrumented_commit": "0c3eeb774d033d36af388d1fdc75bb5c1d9b7759"
   },
   "desktop": {
     "version": "26.1111.21308",
@@ -39,9 +39,9 @@
   },
   "artifacts": {
     "core": {
-      "name": "codex-harness-observatory-core-0.4.0-x86_64-unknown-linux-gnu.tar.gz",
-      "url": "https://github.com/cab938/codex-harness-observatory/releases/download/v0.4.0/codex-harness-observatory-core-0.4.0-x86_64-unknown-linux-gnu.tar.gz",
-      "sha256": "e36a812f45cc7a441783f94c33fc15d475c07133d66cca6dd291c197472d576d"
+      "name": "codex-harness-observatory-core-0.5.0.dev0-x86_64-unknown-linux-gnu.tar.gz",
+      "url": "https://github.com/cab938/codex-harness-observatory/releases/download/v0.5.0-dev0/codex-harness-observatory-core-0.5.0.dev0-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "0c6693d79e2c290e688ca11219ed65866a4ad0f5d88a9bae81e1322365e71411"
     },
     "desktop": {
       "name": "codex-harness-observatory-desktop-0.4.0-linux-x86_64.tar.gz",
@@ -57,6 +57,9 @@
     "mcp_logical_frames": true,
     "inference_prepared_requests": true,
     "harness_events": true,
+    "source_annotated_prompts": true,
+    "live_history_snapshots": true,
+    "context_budget_facts": true,
     "writer_health": true,
     "standalone_pre_root_restore_events": false
   },

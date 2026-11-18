@@ -8,19 +8,22 @@
     "mcp_logical_frames": true,
     "inference_prepared_requests": true,
     "harness_events": true,
+    "source_annotated_prompts": true,
+    "live_history_snapshots": true,
+    "context_budget_facts": true,
     "writer_health": true,
     "standalone_pre_root_restore_events": false
   },
   "identity": {
-    "observatory": "0.3.0",
+    "observatory": "0.5.0.dev0",
     "core": {
-      "version": "0.166.0-alpha.6",
-      "upstream_tag": "rust-v0.166.0-alpha.6",
-      "upstream_commit": "4f093f2748667f3b0e6a07e3d4055121cbd3ce64",
+      "version": "0.169.0",
+      "upstream_tag": "rust-v0.169.0",
+      "upstream_commit": "d32063f96c2dff1dc96af839b3952abb6acfeda4",
       "target": "x86_64-unknown-linux-gnu",
       "v8": {
         "crate_version": "152.2.0",
-        "rusty_v8_commit": "350c5a859a9b3c84ab8701b3ad51e3b7699b30c0",
+        "rusty_v8_commit": "90a65f887a0c0f048f3784afbcb320b373c8a2e0",
         "engine_version": "15.2.124.1",
         "engine_commit": "c4ca1eccb90c5464d826b7713dc27178a53b0cfe",
         "profile": "sandbox_release",
@@ -29,21 +32,22 @@
         "bazel_sha256": "7668a95db1250f12c40407251e4e203b4ec8bf39bc495d2f485b2d8c99048694",
         "archive_sha256": "b3b490f2aa809eda7f6ac727f851fb00ce8355be72827577cfaac28c7137dbcd",
         "published_binding_sha256": "3e4d5fecdbe0f98a6017e69d7ca82519a77fb032c5eb5e4cdbecdd3e2ec519d5",
-        "binding_sha256": "de9a71ee1cb4b5ab12ab5bfe382eab023087693bcf874faa72bff6fef0c2d4d5"
+        "binding_sha256": "dc81049e515ab0a7568779c7f0cbc1db330c2927c67e0f6d0a25a0dab203ccb5"
       },
-      "observatory_patch_sha256": "48e16868274825ccc550118da8544e60bf845d30e9b8781f7cb3c85de38eb82f"
+      "observatory_patch_sha256": "478abe629c3f51ceabe6d6f8ab2b8b8f03aeff850cd3781b27de9a8d8e50c138",
+      "instrumented_commit": "0c3eeb774d033d36af388d1fdc75bb5c1d9b7759"
     },
-    "desktop_version": "26.1029.61003"
+    "desktop_version": "26.1111.21308"
   },
   "api": {
     "experimental_schema": true,
     "experimental_gate": "initialize.capabilities.experimentalApi; some methods also require source-specific feature/configuration gates",
     "raw_event_gate": "thread.experimentalRawEvents plus subscription/inheritance and per-connection notification filters",
-    "schema_sha256": "c4c355204dc0cd33235a8cc0e7fc36cf745ca5c5923f0197d3156f848be8ac23",
-    "stable_schema_sha256": "9e3685e25a86226903ecdbadeeca1985d8dd547a80fbb8df280675e000796b63",
+    "schema_sha256": "e988f22e0e6b387562b15149543cbd32c539700ea7a8904e2dd857953b0dfb87",
+    "stable_schema_sha256": "9123fc8650e94c36b0ad663a4604ae74da054c46cceea91be7d3a60750917aec",
     "groups": {
       "ClientRequest": {
-        "count": 179,
+        "count": 184,
         "methods": [
           "account/bedrock/checkGovCloudRequirements",
           "account/bedrock/discover",
@@ -58,6 +62,7 @@
           "account/rateLimitResetCredit/consume",
           "account/rateLimits/read",
           "account/read",
+          "account/securitySetup/read",
           "account/sendAddCreditsNudgeEmail",
           "account/usage/read",
           "account/workspaceMessages/read",
@@ -116,6 +121,8 @@
           "mock/experimentalMethod",
           "model/list",
           "modelProvider/capabilities/read",
+          "modelProvider/config/write",
+          "modelProvider/list",
           "permissionProfile/list",
           "plugin/install",
           "plugin/installed",
@@ -170,6 +177,7 @@
           "thread/goal/clear",
           "thread/goal/get",
           "thread/goal/set",
+          "thread/guardianReview",
           "thread/increment_elicitation",
           "thread/inject_items",
           "thread/items/list",
@@ -181,6 +189,7 @@
           "thread/metadata/update",
           "thread/name/set",
           "thread/prediction/request",
+          "thread/prepareApprovedPlan",
           "thread/queue/add",
           "thread/queue/delete",
           "thread/queue/list",
@@ -269,11 +278,13 @@
           "thread/backgroundTerminals/list",
           "thread/backgroundTerminals/terminate",
           "thread/decrement_elicitation",
+          "thread/guardianReview",
           "thread/increment_elicitation",
           "thread/items/read",
           "thread/memory/read",
           "thread/memoryMode/set",
           "thread/prediction/request",
+          "thread/prepareApprovedPlan",
           "thread/queue/add",
           "thread/queue/delete",
           "thread/queue/list",
@@ -310,8 +321,11 @@
           "ThreadForkParams.path",
           "ThreadForkParams.permissions",
           "ThreadForkParams.runtimeWorkspaceRoots",
+          "ThreadItemOutputDeferral.commandExecution",
+          "ThreadItemOutputDeferral.mcpToolCall",
           "ThreadListParams.ancestorThreadId",
           "ThreadListParams.attachedToThreadId",
+          "ThreadListParams.includeAttachedThreads",
           "ThreadListParams.parentThreadId",
           "ThreadListParams.projectId",
           "ThreadMetadataUpdateParams.daybreakEnabled",
@@ -382,7 +396,7 @@
         "gate_evidence": "difference between generated experimental and stable schemas"
       },
       "ServerNotification": {
-        "count": 85,
+        "count": 86,
         "methods": [
           "account/gatewayOAuth/changed",
           "account/login/completed",
@@ -456,6 +470,7 @@
           "thread/realtime/transcript/delta",
           "thread/realtime/transcript/done",
           "thread/reverted",
+          "thread/section/changed",
           "thread/settings/updated",
           "thread/started",
           "thread/status/changed",
@@ -472,10 +487,12 @@
         ],
         "experimental_only_methods": [],
         "experimental_only_fields_on_shared_definitions": [
+          "Thread.attachedToThreadId",
           "Thread.canAcceptDirectInput",
           "Thread.daybreakEnabled",
           "Thread.environments",
           "Thread.extra",
+          "ThreadSettings.environments",
           "ThreadSettings.multiAgentMode"
         ],
         "gate_evidence": "difference between generated experimental and stable schemas"
@@ -726,6 +743,9 @@
       "guardian_review": [
         "codex-rs/rollout-trace/src/protocol_event.rs"
       ],
+      "history_snapshot": [
+        "codex-rs/core/src/session/history_trace.rs"
+      ],
       "hook_effect": [
         "codex-rs/core/src/hook_runtime.rs",
         "codex-rs/core/src/session/turn.rs"
@@ -735,6 +755,9 @@
       ],
       "hook_selection": [
         "codex-rs/core/src/hook_runtime.rs"
+      ],
+      "inference_logical_prompt": [
+        "codex-rs/rollout-trace/src/inference.rs"
       ],
       "large": [
         "codex-rs/rollout-trace/src/writer.rs"
