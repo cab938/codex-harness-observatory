@@ -12,6 +12,8 @@ const state = {
   selectedCategories: new Set(),
   tools: new Map(),
   taskFocus: null,
+  teachingThreadScope: '',
+  teachingDescendants: true,
   tasks: new Map(),
   threads: new Map(),
   header: {},
@@ -672,6 +674,18 @@ function identifierLabel(key) {
 
 function matches(event) {
   if (state.taskFocus && laneForEvent(event).key !== state.taskFocus) return false;
+  if (state.taskFocus && !state.teachingDescendants && !state.teachingThreadScope && threadForEvent(event) !== state.taskFocus) return false;
+  if (state.teachingThreadScope) {
+    let thread = threadForEvent(event);
+    if (state.teachingDescendants) {
+      const visited = new Set();
+      while (thread && thread !== state.teachingThreadScope && !visited.has(thread)) {
+        visited.add(thread);
+        thread = state.threads.get(thread)?.parentThreadId;
+      }
+    }
+    if (thread !== state.teachingThreadScope) return false;
+  }
   if (elements.payload.value && event.payload_type !== elements.payload.value) return false;
   if (elements.thread.value && event.thread_id !== elements.thread.value) return false;
   if (elements.turn.value && event.codex_turn_id !== elements.turn.value) return false;
@@ -1004,6 +1018,7 @@ function renderArtifactLinks(event) {
 
 function showDetail(event) {
   state.selectedSeq = event.seq;
+  notifyTeaching();
   elements.detail.textContent = JSON.stringify(event.externalized_payload
     ? { raw_event: event.raw_event, expanded_payload: event.payload }
     : (event.raw_event || event), null, 2);
@@ -1122,6 +1137,9 @@ function taskCountChip(count) {
 
 function focusTask(key) {
   state.taskFocus = key || null;
+  state.teachingThreadScope = '';
+  state.teachingDescendants = true;
+  notifyTeaching();
   renderEvents(false);
 }
 
@@ -1298,6 +1316,7 @@ function receiveEvent(event) {
   ingestTaskEvent(event);
   registerTool(event);
   state.events.push(event);
+  notifyTeaching();
   classifyThreadStart(event);
   addOptions(event);
   const selected = state.events.find((candidate) => candidate.seq === state.selectedSeq);
@@ -1325,6 +1344,7 @@ function displayCaptureDiagnostic(metadata) {
 
 function displayHeader(metadata) {
   state.header = { ...state.header, ...metadata };
+  notifyTeaching();
   displayCaptureDiagnostic(state.header);
   ingestHeaderTasks(metadata);
   state.waitingForTrace = metadata.stream_mode === 'waiting_for_trace_bundle';
@@ -1406,7 +1426,7 @@ const filterControls = [
 ];
 for (const control of filterControls) {
   control.addEventListener('input', () => renderEvents(false));
-  control.addEventListener('change', () => renderEvents(false));
+  control.addEventListener('change', () => { if (control === elements.thread) state.teachingThreadScope = ''; renderEvents(false); if (control === elements.thread) notifyTeaching(); });
 }
 elements.reset.addEventListener('click', () => {
   for (const control of filterControls) {
@@ -1415,6 +1435,8 @@ elements.reset.addEventListener('click', () => {
   }
   state.selectedCategories.clear();
   state.taskFocus = null;
+  state.teachingThreadScope = '';
+  notifyTeaching();
   elements.category.open = false;
   refreshCategoryOptions();
   elements.harnessOnly.checked = false;
@@ -1432,6 +1454,7 @@ elements.category.addEventListener('keydown', (event) => {
 elements.pause.addEventListener('click', () => {
   state.paused = !state.paused;
   state.visibleCount = state.paused ? state.events.length : null;
+  notifyTeaching();
   elements.pause.textContent = state.paused ? 'Resume' : 'Pause';
   elements.pause.setAttribute('aria-pressed', state.paused ? 'true' : 'false');
   if (state.header.stream_mode === 'recorded_jsonl') setConnection('recorded', state.paused ? 'Paused capture' : 'Recorded');
@@ -1449,3 +1472,33 @@ loadHeader().then(connect).catch((error) => {
   elements.notice.hidden = false;
   setConnection('error', 'Unavailable');
 });
+
+// The teaching views consume the same scope and frozen event prefix as Events.
+function notifyTeaching() {
+  window.dispatchEvent(new CustomEvent('observatory-change'));
+}
+window.ObservatoryBridge = {
+  state() {
+    const visible = displayedEvents();
+    return { root: state.taskFocus === SESSION_LANE ? '' : state.taskFocus || '',
+      thread: state.teachingThreadScope || elements.thread.value, paused: state.paused,
+      until: state.paused ? (visible.at(-1)?.seq ?? 0) : null,
+      selectedSeq: state.selectedSeq, header: state.header };
+  },
+  setScope(root, thread, descendants) {
+    state.taskFocus = root || null;
+    state.teachingThreadScope = thread || '';
+    state.teachingDescendants = descendants;
+    elements.thread.value = ''; // The shared scope includes descendants when selected.
+    renderEvents(false);
+    notifyTeaching();
+  },
+  selectEvent(seq) {
+    const event = displayedEvents().find((candidate) => candidate.seq === Number(seq));
+    if (!event) return false;
+    showDetail(event);
+    document.querySelector('[data-view="events"]').click();
+    document.querySelector(`[data-testid="event-${event.seq}"]`)?.scrollIntoView({block: 'nearest'});
+    return true;
+  },
+};

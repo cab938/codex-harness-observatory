@@ -169,6 +169,19 @@ class TraceViewerTest(unittest.TestCase):
         ]
         self.assertEqual(trace_viewer.integrity_findings(iter(trace)), [])
 
+    def test_only_pre_turn_compaction_decisions_precede_step_context(self):
+        item = {
+            "category": "context", "name": "compaction_decision", "phase": "decided",
+            "details": {"phase": "pre_turn", "budget": {"active_context_tokens": 100}},
+        }
+        event = {"seq": 1, "payload": {"type": "harness_event_observed", "event": item}}
+        self.assertEqual(trace_viewer.integrity_findings(iter([event])), [])
+        item["details"]["phase"] = "mid_turn"
+        self.assertEqual(
+            [finding.invariant for finding in trace_viewer.integrity_findings(iter([event]))],
+            ["event requires a non-empty step_id"],
+        )
+
     def test_skipped_approval_requirement_precedes_approval_identity(self):
         trace = [
             {

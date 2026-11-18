@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="light">
     <title>Codex Harness Observatory</title>
     <link rel="stylesheet" href="/assets/styles.css">
+    <link rel="stylesheet" href="/assets/teaching.css">
   </head>
   <body>
     <header class="topbar">
@@ -30,7 +31,23 @@
       </div>
     </header>
 
-    <main class="workspace">
+    <nav class="view-bar" aria-label="Observatory views">
+      <div class="view-tabs" role="tablist" aria-label="Views">
+        <button type="button" role="tab" data-view="events" aria-selected="true">Events</button>
+        <button type="button" role="tab" data-view="trajectory" aria-selected="false">Trajectory</button>
+        <button type="button" role="tab" data-view="context" aria-selected="false">Context</button>
+      </div>
+      <div class="shared-controls">
+        <label>Task <select id="teaching-root" aria-label="Task scope"><option value="">All tasks</option></select></label>
+        <label>Agent <select id="teaching-thread" aria-label="Agent scope"><option value="">All agents</option></select></label>
+        <label><input type="checkbox" id="teaching-descendants" checked> Include descendants</label>
+        <div class="stream-actions">
+          <button type="button" class="control-button" id="follow-live" data-testid="follow-live" aria-pressed="true">Follow</button>
+          <button type="button" class="control-button primary" id="pause-stream" data-testid="pause-stream" aria-pressed="false">Pause</button>
+        </div>
+      </div>
+    </nav>
+    <main class="workspace" id="events-view" role="tabpanel">
       <aside class="filter-panel" aria-labelledby="filter-title">
         <div class="panel-heading">
           <h2 id="filter-title">Filters</h2>
@@ -114,10 +131,7 @@
               <span id="received-context" hidden> of <span id="received-count" data-testid="received-count">0</span></span>
               <span id="buffered-count" data-testid="buffered-count" hidden></span>
             </div>
-            <div class="stream-actions">
-              <button type="button" class="control-button" id="follow-live" data-testid="follow-live" aria-pressed="true">Follow</button>
-              <button type="button" class="control-button primary" id="pause-stream" data-testid="pause-stream" aria-pressed="false">Pause</button>
-            </div>
+
           </div>
         </div>
         <div id="capture-diagnostic" class="capture-diagnostic" data-testid="capture-diagnostic" hidden role="status" aria-live="polite"></div>
@@ -164,6 +178,8 @@
             </details>
           </section>
 
+          <div id="related-teaching" class="evidence-links" aria-label="Related teaching views"></div>
+
           <section id="evidence-section" class="evidence-section" aria-labelledby="evidence-title" hidden>
             <h3 id="evidence-title">Artifacts</h3>
             <div id="artifact-links" class="artifact-links" data-testid="artifact-links"></div>
@@ -199,6 +215,9 @@
       </aside>
     </main>
 
+    <main id="trajectory-view" class="teaching-view" role="tabpanel" hidden></main>
+    <main id="context-view" class="teaching-view" role="tabpanel" hidden></main>
     <script src="/assets/app.js" defer></script>
+    <script src="/assets/teaching.js" defer></script>
   </body>
 </html>

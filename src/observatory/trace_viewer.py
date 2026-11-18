@@ -1025,6 +1025,9 @@ def required_step(item: dict[str, Any]) -> bool:
         return not request_tool_catalog(item)
     if category == "decision" and name in DECISION_STEP_REQUIRED_EVENTS:
         return True
+    if (category, name) == ("context", "compaction_decision"):
+        details = item.get("details")
+        return not isinstance(details, dict) or details.get("phase") != "pre_turn"
     if (category, name) in STEP_REQUIRED_EVENTS:
         return True
     if category == "multi_agent" and name in MULTI_AGENT_TOOL_EVENTS:
@@ -2037,10 +2040,18 @@ class TraceViewerRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/":
             self.serve_asset("index.html", "text/html; charset=utf-8")
-        elif parsed.path == "/assets/app.js":
-            self.serve_asset("app.js", "text/javascript; charset=utf-8")
-        elif parsed.path == "/assets/styles.css":
-            self.serve_asset("styles.css", "text/css; charset=utf-8")
+        elif parsed.path.startswith("/assets/"):
+            name = parsed.path.removeprefix("/assets/")
+            suffix = Path(name).suffix
+            if (
+                Path(name).name != name
+                or suffix not in {".js", ".css"}
+                or not (WEB_ASSET_DIR / name).is_file()
+            ):
+                self.send_json({"error": "asset not found"}, HTTPStatus.NOT_FOUND)
+            else:
+                content_type = "text/javascript" if suffix == ".js" else "text/css"
+                self.serve_asset(name, content_type + "; charset=utf-8")
         elif parsed.path == "/favicon.ico":
             self.send_bytes(b"", "image/x-icon", HTTPStatus.NO_CONTENT)
         elif parsed.path == "/api/header":
@@ -2073,6 +2084,10 @@ class TraceViewerRequestHandler(BaseHTTPRequestHandler):
                     {"error": safe_stream_error(error, source)},
                     HTTPStatus.UNPROCESSABLE_ENTITY,
                 )
+        elif parsed.path == "/api/teaching":
+            from observatory.teaching_http import serve_teaching
+
+            serve_teaching(self, parse_qs(parsed.query))
         elif parsed.path == "/api/stream":
             self.stream_events(parse_qs(parsed.query))
         elif parsed.path == "/api/artifact":
