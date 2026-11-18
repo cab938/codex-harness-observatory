@@ -4,47 +4,36 @@ This is the local build and test workflow for the refactored Observatory. Use `r
 
 ## Standard route
 
-Edit and coordinate on the desktop host. Run a small vLLM backend on its RTX PRO 6000 Blackwell GPU. Build and run candidate Codex CLI/Desktop software in vm02, using its existing build disk. Connect the VM to the host backend through an SSH reverse tunnel. Inspect Desktop and the browser-based Observatory through the guest's private display.
+Edit and coordinate on the desktop host. Build and exercise candidate native clients in fresh disposable Linux VMs on Nellodee, selected through the current [agent-vm skill](/home/brooksch/.codex/skills/agent-vm/SKILL.md). The skill owns inventory, host/template selection, limits, pinned SSH access, guest console setup and teardown. Re-read it for each task instead of reusing an old VM address or display command. The maintained source VM and templates are not test guests.
 
-```text
-Host GPU: vLLM on 127.0.0.1:18000
-    ^
-    | SSH reverse forwarding
-    |
-vm02: 127.0.0.1:18000
-    ^
-    | Responses API
-    |
-candidate Codex CLI or Desktop -> native capture -> run directory
-                                                     |
-                                                Observatory
-```
+For authenticated model acceptance, copy only the user's file-backed Codex auth cache into separate guest test homes using the helper below. Use the actual OpenAI provider and record the selected model. The historical local-model route below remains a reproduction record; it is not the default and is unnecessary for this route. Retained-recording and deterministic mock-provider checks do not need account credentials.
 
-Within an assigned development task, agents can start the selected VM when needed, start a task-owned model server, transfer source, build candidates, create test homes, run focused checks, and clean up those processes. Keep the host's daily Codex installation, existing GPU jobs, and previous acceptance evidence intact.
+Keep source, caches, build outputs and evidence in task-owned guest directories. Transfer the candidate checkout including intended untracked files, record its base revision and dirty source digest, and use the exact Core, Desktop and V8 pins from release.json. Run build_v8_binding.py before build_native.sh when a matching binding is unavailable; published bindings and archives are separate inputs. Preserve the generated binding provenance. Reuse the unchanged pinned Desktop archive when only Core or the viewer changes.
 
-## Environments and access
+The November 16 Ubuntu 26.04 guest used the source-pinned Rust 1.95.0 toolchain with rustfmt, clippy and rust-src, plus cargo-nextest 0.9.152 for `just test`. Its added packages were just, clang, cmake, pkg-config, libssl-dev, libsqlite3-dev, protobuf-compiler, libdbus-1-dev, libudev-dev and libcap-dev. The last is required by the bundled bwrap build. Follow the source toolchain and release pins on later runs rather than treating these observed versions as new pins. The final formatting command also needs the upstream formatting tools, including uv. Build bwrap first and embed that exact helper's digest through build_native.sh; a direct Cargo build that omits the digest is not an acceptance candidate.
 
-Use the [agent-vm skill](/home/brooksch/.codex/skills/agent-vm/SKILL.md) for access and live readiness checks. The skill owns the general SSH/CUA instructions; do not duplicate them in another runbook.
+Use narrow tests for the changed behavior, followed by one hand-checkable live file edit through the CLI and Desktop when native capture changes. Use the skill's guest console for GUI testing. Keep each client profile separate from source, test workspaces and recordings. Test the exact candidate executables rather than whichever Codex is on PATH. The temporary exact-executable AppArmor profile described below is appropriate only if the guest blocks Chromium sandbox startup.
 
-| Domain | Project use | Access information |
-| --- | --- | --- |
-| brooksch-agent-vm00 | General Linux shell work | The skill lists SSH and private-display access. |
-| brooksch-agent-vm01 | Windows checks when the changed behavior affects Windows | The skill lists Windows SSH and interactive-session CUA access. |
-| brooksch-agent-vm02 | Standard native Linux build and GUI test guest for this project | SSH as codex at 141.213.182.177; existing Observatory disk and private-display helpers. |
-| brooksch-agent-vm03 | Additional Linux shell capacity | SSH as codex at 141.213.182.120 was checked; private-display helpers are absent at their standard paths. |
+Before deleting a guest, retrieve the candidate artifacts, source identity, focused test results, recordings and screenshots. Keep credentials and test homes out of those transfers. Delete task-owned disposable VMs through agent-vm and verify removal. A retained guest requires a stated reason and credential cleanup when its test homes are no longer needed.
 
-All four domains were running during discovery. vm02 has about 16 GiB RAM and a separate disk mounted at `/srv/observatory-0166`, with about 103 GiB free. Its root filesystem has only about 2.4 GiB free. These are dated observations: check them again before work. vm02 is the project default because its build storage and tooling already exist.
+The current checkout is a local 0.5.0.dev0 development candidate for the DSH-inspired teaching views. The existing 0.4.0 archive and its evidence remain intact. Development artifacts are built into a fresh output directory; no release is published by these checks.
 
-Check the host and chosen guest before starting:
+## Authentication for a disposable Nellodee test VM
+
+When a task needs the user's Codex authentication, copy only `auth.json` to a dedicated, short test home in an active disposable Nellodee instance. Use separate homes for CLI and Desktop, for example:
 
 ```bash
-virsh -c qemu:///system list --all
-nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv
-ssh -o BatchMode=yes -o ConnectTimeout=5 codex@141.213.182.177 \
-  'df -h / /srv/observatory-0166'
+python3 src/scripts/vm_auth.py INSTANCE /home/codex/.obs-dsh-cli
+python3 src/scripts/vm_auth.py INSTANCE /home/codex/.obs-dsh-desktop
 ```
 
-Check existing processes and GPU ownership before claiming resources. Do not stop another job to make room. If vm02 is occupied, select another suitable guest using the skill and record that change. Do not infer OS or GUI readiness from a domain's name. Preserve the original power state: shut down a VM normally afterward only if this task started it.
+The source defaults to `$CODEX_HOME/auth.json` when `CODEX_HOME` is set, otherwise `~/.codex/auth.json`; use `--source /path/to/auth.json` to override it. A missing file or keyring-only login requires a file-backed auth cache. The helper checks the managed instance and uses its pinned SSH configuration, sends credentials over SSH stdin, and installs the file with mode 0600 in an owned 0700 home. It does not copy other profile data.
+
+Keep credentials out of templates, source transfers, logs, recordings, and exported artifacts. Delete the task's disposable VM after testing using the agent-vm workflow, which removes its test homes along with the VM. If the VM is explicitly retained, remove the task's credential-bearing homes when they are no longer needed.
+
+## Historical local-model route (November 14)
+
+The following numbered procedure records the earlier vm02/Qwen/vLLM acceptance environment. Its VM addresses, storage paths and capacity observations are historical. For current work, follow the disposable-VM route above and the live skill; do not start or reuse these old domains from this document.
 
 ## 1. Prepare the guest source and build storage
 

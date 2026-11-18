@@ -2,6 +2,8 @@
 
 The goal is close functional resemblance to the supplied Context and Trajectory views, with differences made deliberately for teaching. This inventory includes interactions revealed by source inspection that a still screenshot cannot show. It does not mean every listed feature should be implemented in the first tranche.
 
+This is the assessment inventory, not a claim of implemented parity. See [the implementation record](DEVELOPMENT.md#implementation-record-2026-11-16) for the delivered first version, G1-G3 capture additions, verification and deferred work.
+
 Source keys (D.*, T.*, O.*, C.*) are navigation keys in [SOURCES.md](SOURCES.md). Evidence routes E1-E15 and metric definitions are owned by [DATA_MAP.md](DATA_MAP.md). G1-G9 are collection/design gaps owned by [CAPTURE_PLAN.md](CAPTURE_PLAN.md).
 
 ## Reading the map
@@ -16,9 +18,9 @@ Source keys (D.*, T.*, O.*, C.*) are navigation keys in [SOURCES.md](SOURCES.md)
 | ID / priority | Display and teaching purpose | DSH reference | Existing data / support | Work or additional collection |
 |---|---|---|---|---|
 | U01 P1 | Select chat/task and agent; understand whose work and context are shown. | D.view, T.view; session-bound views | E1/E12, V+S; existing TaskLedger and task tree | Reuse root/thread identities. Add explicit self/descendants scope; independent background roots stay separate. |
-| U02 P1 | Context and Trajectory tabs share a selected request/item. | D.view focus handlers, T.view | E1-E3/E7, V | Shared stable selection; graph/trend click selects matching ledger/detail and vice versa. No capture change. |
+| U02 P1 | Context, Trajectory and Events have linked request/item/event selections. | D.view focus handlers, T.view; existing Observatory event inspection | E1-E3/E7, V | Shared stable selection; graph/trend click selects matching ledger/detail. Derived rows link to all contributing raw events; unmatched raw selections remain valid. No capture change. |
 | U03 P1 | Observe live work, pause inspection, follow the tail, replay after shutdown. | D.view, T.view | E13 and existing SSE/replay, V | Reuse pause/follow and recorded mode. Freeze inspection position without stopping capture. |
-| U04 P1 | Reach original event and payload evidence behind a semantic explanation. | T.table detail tabs; Observatory artifacts | E1-E13, V+S | Keep the current raw-log/artifact path. Derived rows cite every contributing event and JSON location. |
+| U04 P1 | Preserve a first-class Events view for wire traffic and raw harness/runtime observations, alongside Context and Trajectory. | Existing Observatory raw-event/artifact view; T.table source detail | E1-E13, V+S | Preserve expansive capture, original event order and payload inspection. Derived rows cite every contributing event and JSON location. Working view/navigation requirement is recorded in DEVELOPMENT.md. |
 | U05 P2 | Stable selection, keyboard focus, aligned rows, linked color highlighting. | D.browser/D.trend, T.table/T.timeline | UI state only | Preserve semantic colors and non-color labels; honor the project's visual guide. No capture change. |
 | U06 P1 | Inspect text, code, JSON, available media and opaque content without conflating them. | D.content, T.table | E2/E3/E7/E10, V+S | Rich renderers plus raw form. Render authentic reasoning only when present; encrypted content stays opaque. |
 | U07 P1 | Distinguish a historical recording from today's tools/files/configuration. | D.assemble, T.header | E2/E11/E13, V+S | Resolve everything against the recording; show unavailable historical state. G7/G8 only where bytes/schema are absent. |

@@ -1,12 +1,14 @@
 # DSH-style Context and Trajectory for the Observatory
 
-Assessment date: 2026-11-16. Status: source-grounded design spike for discussion. No Observatory, Codex, or DSH implementation was changed. The feature mappings and capture additions below are proposals, not adopted APIs or implementation authorization.
+Assessment date: 2026-11-16. The original source-grounded spike and baseline evidence are preserved here. The user subsequently authorized implementation; current delivered behavior, metric choices, acceptance results and remaining limits are recorded in [DEVELOPMENT.md](DEVELOPMENT.md#implementation-record-2026-11-16). The full feature inventory remains the wider target.
 
 ## Purpose and scope
 
-Build an interface close to the DSH Context dashboard and Trajectory view supplied by the instructor, adapted to explain how Codex works. The primary audience is learners and an instructor examining an agent's behavior. Throughput tuning, billing optimization, fleet administration, and production monitoring are secondary.
+Build an interface close to the DSH Context dashboard and Trajectory view supplied by the instructor, adapted to explain how Codex works. The audience is learners, including instructors sharing what they know. Throughput tuning, billing optimization, fleet administration, and production monitoring are secondary.
 
 The target includes the visible panels and their supporting interactions: request selection, context composition and change, item inspection, tool nesting, timelines, filters, schemas, images, commands, and links between views. It does not automatically include DSH's surrounding chat application, plugin manager, advertising, global Context Insights, standalone Fleet tab, or context-changing commands.
+
+The existing wire-event capture and Events view remain first-class alongside the two new semantic views. See the settled event-view and capture requirement in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 Preserved screenshot references:
 
@@ -27,7 +29,7 @@ Preserved screenshot references:
 
 Detailed definitions live in those owning documents. This README is a route through them.
 
-## Findings
+## Findings at the assessment baseline
 
 1. **Most of the interface is a viewer/projection feature.** The recording already contains prepared model requests, parsed outputs, usage, tools and results, terminal observations, code-cell relationships, compaction checkpoints, agent relationships, and App Server/MCP messages. The present web UI exposes an event list and artifacts; it does not yet assemble the teaching displays.
 
@@ -37,7 +39,7 @@ Detailed definitions live in those owning documents. This README is a route thro
 
 4. **The DSH displays contain estimates and application-specific definitions.** Category token sizes are estimated and sometimes scaled to reported totals. "Skill Loads" counts distinct skill names in the inspected code. "Answers" includes assistant messages with text. Turn aggregation keeps the last context snapshot, rather than summing context sizes. These are useful references, not Codex semantics to copy silently.
 
-5. **The largest potential scope expansion is an exact "Live (Next Request)" display.** A last observed request is available now. A complete current history or guaranteed future request is not. Accepted-item receipts are not full history snapshots, and admission does not mean provider submission. We can deliver a strong historical teaching interface before deciding whether live history tracking is worth extra patching. See G3.
+5. **The target includes a DSH-style live context preview.** As recorded in D1 of DEVELOPMENT.md, the interface should support both historical requests and current history between requests. A last observed request is available now; the minimum extra collection needed for a faithful live preview remains open under G3. Accepted-item receipts are not full history snapshots, and a preview does not guarantee the eventual next request.
 
 6. **Detailed timing is optional and should remain clearly defined.** Model/tool lifecycles and client-facing streaming observations already support useful timing. The six-way timing donut requires more precise inference-correlated observations. It should not block the core teaching views. See G5.
 
@@ -58,8 +60,8 @@ Every model attempt and tool call in these two recordings had a matching termina
 
 These are short local-provider recordings. They do not exercise images, child agents, compaction, or incremental WebSocket requests. Source and existing regression-test inspection support those routes; new live acceptance was not performed.
 
-The checked-in collection inventory names Observatory 0.3.0/Core 0.166.0-alpha.6. It is stale relative to release.json and must not be treated as proof of current coverage. This spike records the discrepancy without changing that inventory.
+At the assessment baseline, the checked-in collection inventory named Observatory 0.3.0/Core 0.166.0-alpha.6 and was stale relative to release.json. Implementation regenerated the declaration inventory for the pinned 0.169.0 source. Declaration availability remains separate from actual runtime exercise.
 
 ## Recommended discussion outcome
 
-Agree on the learner-facing meanings and the minimum capture tranche first. Then build linked Context and Trajectory projections over the existing recording, with original evidence always reachable. The likely high-value capture additions are G1 source attribution and G2 context-budget observations. Exact next-request simulation, detailed decode timing, arbitrary filesystem auditing, and cost services should require an affirmative teaching reason.
+Settled discussion decisions are recorded in DEVELOPMENT.md. Agree on the remaining learner-facing meanings and minimum capture additions, then build linked Context and Trajectory projections with original evidence always reachable. The likely high-value capture additions are G1 source attribution and G2 context-budget observations. Exact next-request simulation, detailed decode timing, arbitrary filesystem auditing, and cost services should require an affirmative teaching reason.

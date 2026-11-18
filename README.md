@@ -32,6 +32,18 @@ Desktop needs working Chromium sandbox support. On Ubuntu systems that restrict 
 
 Replay also accepts an exported ZIP or a `trace.jsonl` path. It displays full content and reads the recording without changing it.
 
+## Inspect the agent loop
+
+The three views use the same retained recording:
+
+- **Events** preserves the complete recorded sequence, protocol frames, correlations and original payload inspection.
+- **Trajectory** groups user input, model requests, assistant output and tool execution, with links back to contributing events.
+- **Context** browses historical requests and the latest observed history, with source groups, estimated composition, reported usage, trends and recorded budget facts.
+
+Task and agent selection, descendant scope, and Pause apply across the views. Selecting an evidence link opens its original event. Context items load their recorded content when expanded.
+
+Live history is a preview of the history Core currently retains. Base instructions and tools can come from an earlier observed prompt, and the next request can differ. Estimated category sizes exclude opaque/media portions; provider-reported request totals remain separate. Older recordings still open, with unavailable source attribution or current history shown explicitly.
+
 ## Source layout
 
 ```text
@@ -54,4 +66,4 @@ The native source keeps CLI, Core, App Server, and capture together in their ups
 
 For a source checkout, initialize the pinned native source with `git submodule update --init --recursive`, then follow the development guide to build the matched runtimes.
 
-See [development and testing](docs/development.md) for the VM build and local-model workflow, and [discussion notes](docs/discussion.md) for the requirements and design decisions. Most earlier documents in [docs](docs/README.md) are historical.
+See [development and testing](docs/development.md) for disposable VM builds, auth transfer and acceptance checks, and [DSH design decisions](spike-dsh-gui/DEVELOPMENT.md) for the teaching interface scope. Most earlier documents in [docs](docs/README.md) are historical.

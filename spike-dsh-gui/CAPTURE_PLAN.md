@@ -2,6 +2,8 @@
 
 These are concrete proposals for discussion, not approved wire formats. Feature IDs are in [FEATURE_MAP.md](FEATURE_MAP.md); existing evidence and identity rules are in [DATA_MAP.md](DATA_MAP.md). Code keys resolve in [SOURCES.md](SOURCES.md).
 
+This is the assessment inventory, not a claim of implemented parity. See [the implementation record](DEVELOPMENT.md#implementation-record-2026-11-16) for the delivered first version, G1-G3 capture additions, verification and deferred work.
+
 ## What can be built without new native patches
 
 Historical request browser; model input/output inspection; actual reported usage and cache share; model/tool counts; coarse context trend/deltas; semantic tool/terminal ledger; code-cell/subtool hierarchy; compaction checkpoint comparison; root/agent navigation; rich/raw details; search, filtering, brushing, folding and linked selection.
@@ -12,7 +14,7 @@ These require substantial reader/projection/UI work, but not a new collector. Mi
 |---|---|---|---|
 | G1 | Explain where context comes from, independent of role. | Preserve existing annotated logical prompt in trace-local evidence before request shaping removes annotations. | Highest-value collection candidate. |
 | G2 | Explain context pressure and why compaction occurred. | Add already-computed budget/model quantities to existing context observations. | Highest-value small capture candidate. |
-| G3 | Inspect complete current live history / preview next request. | Observe actual post-mutation history snapshots or revisions at native owners. | Separate decision; avoid making it a prerequisite. |
+| G3 | Inspect current history between requests in a DSH-style live preview. | Observe the needed post-mutation history facts at native owners. | Live preview is in the D1 target; fidelity and minimum capture boundary remain open. |
 | G4 | Named explicit/implicit skill use, distinct from catalog/read. | Mirror native invocation observations into the project trace. | Small, targeted candidate after G1. |
 | G5 | Faithful first-output and decode-phase timing. | Inference-correlated compact stream observations at the shared mapping boundary. | Optional teaching enhancement; lower priority than G1/G2. |
 | G6 | Explain file operations and non-compaction removals. | Reuse typed existing evidence; add source-local observations only for selected missing operations. | Scope narrowly; no general OS audit. |
@@ -77,13 +79,15 @@ Likely patches: C.turn and, if needed, C.session's existing step-context event; 
 
 Acceptance: a hand-checkable threshold scenario displays exactly the status used by Core, including body-after-prefix scope; unknown limits remain unknown; the display distinguishes reported input from harness estimate; compaction counts increase only on installation. A request made before any usage is reported still has meaningful limit metadata without an invented usage total.
 
-## G3. Complete current history and "next request"
+## G3. Live context preview and current history
 
 The current data supports observed historical requests well. It does not expose a complete state machine of current live history between requests. history_item_accepted generally supplies only an ID. Its admission callback is called with the original envelope; live history may separately truncate that content. Requests also format/filter history, add prefix items and vary by selected model.
 
-Recommended first display: "Latest observed request", with historical selection. A clearly labelled preview assembled from known later facts can be optional, but cannot claim completeness or provider-token accuracy.
+Discussion target: D1 in DEVELOPMENT.md includes a DSH-style live preview alongside historical request inspection. "Latest observed request" remains a useful initial implementation, with the live preview added as part of the agreed target.
 
-If a complete live-history display is selected, add an observation of the actual resulting history at append, replacement, rollback/resume and other relevant mutation boundaries. Reuse the owning ContextManager rather than reimplementing its mutation rules in the viewer. A snapshot/revision should establish:
+DSH's live browser assembles the current surface nodes rather than selecting the last request snapshot (D.assemble). Its current estimate can therefore include later assistant messages or tool results. In live mode, the displayed Actual figure comes from the latest request record (D.browser); it is not a measured size for a future request. These observations were checked in the pinned local source during the design discussion.
+
+If complete live-history fidelity is needed to support the preview, add an observation of the actual resulting history at append, replacement, rollback/resume and other relevant mutation boundaries. Reuse the owning ContextManager rather than reimplementing its mutation rules in the viewer. A snapshot/revision should establish:
 
 - Actual ordered admitted items and post-mutation content, including truncation/filter outcome.
 - Revision identity, predecessor and the operation/reason that changed it.
